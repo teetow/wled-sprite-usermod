@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include <math.h>
 
-namespace sprite_um {
+namespace sprite_usermod {
 
 constexpr uint32_t SPRITE_STATE_MAGIC = 0x53505254UL;
 constexpr uint16_t SPRITE_MAX_DIMENSION = 320;
@@ -118,7 +118,7 @@ static File spritePngFile;
 static SpriteStats spriteStats = {};
 static uint8_t spriteEffectId = 255;
 
-static const char _data_FX_MODE_SPRITE_UM[] PROGMEM = "Sprite UM@Move speed,Instances,,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0";
+static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0";
 
 void modeSpriteUsermod();
 void *spritePngOpen(const char *filename, int32_t *size);
@@ -810,7 +810,7 @@ byte renderUsermodSpriteToSegment(Segment &seg) {
 }
 
 void addSpriteInfo(JsonObject &root) {
-  JsonObject spriteInfo = root.createNestedObject(F("sprite_um"));
+  JsonObject spriteInfo = root.createNestedObject(F("sprite_usermod"));
   spriteInfo[F("ready")] = spriteEffectId != 255;
   spriteInfo[F("fxid")] = spriteEffectId;
   spriteInfo[F("mode")] = F("cache");
@@ -834,7 +834,7 @@ void addSpriteInfo(JsonObject &root) {
 
 void registerEffect() {
   if (spriteEffectId != 255) return;
-  spriteEffectId = strip.addEffect(255, &modeSpriteUsermod, _data_FX_MODE_SPRITE_UM);
+  spriteEffectId = strip.addEffect(255, &modeSpriteUsermod, _data_FX_MODE_SPRITE);
 }
 
 void modeSpriteUsermod() {
@@ -846,18 +846,18 @@ void modeSpriteUsermod() {
   if (renderUsermodSpriteToSegment(SEGMENT) != SPRITE_ERROR_NONE) SEGMENT.fill(SEGCOLOR(0));
 }
 
-} // namespace sprite_um
+} // namespace sprite_usermod
 
 class SpriteUsermod : public Usermod {
   public:
     void setup() override {
-      sprite_um::registerEffect();
+      sprite_usermod::registerEffect();
     }
 
     void loop() override {}
 
     void addToJsonInfo(JsonObject &root) override {
-      sprite_um::addSpriteInfo(root);
+      sprite_usermod::addSpriteInfo(root);
     }
 };
 

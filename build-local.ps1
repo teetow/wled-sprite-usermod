@@ -17,7 +17,7 @@ $usermodDir = (Resolve-Path $usermodDir).Path
 $wledDir = (Resolve-Path $WledPath).Path
 $usermodName = 'wled-sprite-usermod'
 $altConf = 'platformio.sprite.ini'
-$altEnv = "${PioEnv}_sprite_um"
+$altEnv = "${PioEnv}_sprite_usermod"
 $platformioIni = Join-Path $wledDir 'platformio.ini'
 $altConfPath = Join-Path $wledDir $altConf
 $usermodSpec = "$usermodName = symlink://$($usermodDir -replace '\\', '/')"
@@ -27,6 +27,27 @@ $firmwarePath = Join-Path $wledDir ".pio\build\$altEnv\firmware.bin"
 if (-not (Test-Path $platformioIni -PathType Leaf)) {
   throw "WLED checkout not found at: $wledDir"
 }
+
+function Assert-StockWledCheckout {
+  param([string]$RepoPath)
+
+  $gitDir = Join-Path $RepoPath '.git'
+  if (-not (Test-Path -LiteralPath $gitDir)) {
+    throw "Expected a git checkout at: $RepoPath"
+  }
+
+  $originUrl = (git -C $RepoPath remote get-url origin 2>$null)
+  if (-not $originUrl) {
+    throw "Could not read git origin remote from: $RepoPath"
+  }
+
+  $normalized = $originUrl.ToLowerInvariant()
+  if ($normalized -notmatch '(github\.com[:/])wled/wled(\.git)?$') {
+    throw "Expected stock WLED origin (github.com/wled/WLED), got: $originUrl"
+  }
+}
+
+Assert-StockWledCheckout -RepoPath $wledDir
 
 if ($SkipBuild -and -not $DeployHost) {
   throw "-SkipBuild requires -DeployHost."
@@ -126,8 +147,8 @@ function Deploy-Firmware {
     try {
       $postDeployInfo = Get-WledInfo -DeviceHost $DeviceHost
       if (-not $preDeployInfo -or $postDeployInfo.uptime -lt $preDeployInfo.uptime) {
-        if ($null -eq $postDeployInfo.sprite_um -or -not $postDeployInfo.sprite_um.ready) {
-          throw "Panel rebooted but sprite_um is not ready after deployment."
+        if ($null -eq $postDeployInfo.sprite_usermod -or -not $postDeployInfo.sprite_usermod.ready) {
+          throw "Panel rebooted but sprite_usermod is not ready after deployment."
         }
         return $postDeployInfo
       }

@@ -11,13 +11,29 @@ WLED_DIR=$(cd -- "$1" && pwd)
 PIO_ENV=${2:-esp32dev}
 USERMOD_NAME=wled-sprite-usermod
 ALT_CONF=platformio.sprite.ini
-ALT_ENV=${PIO_ENV}_sprite_um
+ALT_ENV=${PIO_ENV}_sprite_usermod
 USERMOD_PATH=$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$USERMOD_DIR")
 USERMOD_SPEC="$USERMOD_NAME = symlink://$USERMOD_PATH"
 USERMOD_LINK="$WLED_DIR/.pio/libdeps/$ALT_ENV/$USERMOD_NAME.pio-link"
 
 if [[ ! -f "$WLED_DIR/platformio.ini" ]]; then
   echo "WLED checkout not found at: $WLED_DIR" >&2
+  exit 1
+fi
+
+if [[ ! -d "$WLED_DIR/.git" ]]; then
+  echo "Expected a git checkout at: $WLED_DIR" >&2
+  exit 1
+fi
+
+ORIGIN_URL=$(git -C "$WLED_DIR" remote get-url origin 2>/dev/null || true)
+if [[ -z "$ORIGIN_URL" ]]; then
+  echo "Could not read git origin remote from: $WLED_DIR" >&2
+  exit 1
+fi
+
+if [[ ! "${ORIGIN_URL,,}" =~ (github\.com[:/])wled/wled(\.git)?$ ]]; then
+  echo "Expected stock WLED origin (github.com/wled/WLED), got: $ORIGIN_URL" >&2
   exit 1
 fi
 
