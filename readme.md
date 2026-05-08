@@ -1,4 +1,4 @@
-# WLED Sprite usermod
+# wled-sprite-usermod
 
 `Sprite` is a standalone WLED usermod that renders a PNG sprite or a
 JSON-defined animation on a 2D segment. The asset is selected from the segment
@@ -16,12 +16,12 @@ This effect does not render on 1D segments.
 
 Add this usermod to `custom_usermods` in your WLED build.
 
-For most users, the simplest option is to reference the published branch directly:
+For most users, the simplest option is to reference the published repository directly:
 
 ```ini
 custom_usermods =
   ${env:esp32dev.custom_usermods}
-  https://github.com/teetow/WLED.git#wled-sprite-usermod
+  https://github.com/teetow/wled-sprite-usermod.git#main
 ```
 
 If you are working on the usermod locally, point `custom_usermods` at a local checkout instead:
@@ -112,7 +112,7 @@ The helper scripts create a temporary `platformio.sprite.ini`, link this repo
 into `custom_usermods` through `symlink://...`, and build the derived
 environment `esp32dev_sprite_usermod`.
 
-They also validate that the target checkout is stock WLED (`github.com/wled/WLED`) to avoid compiling against older custom Sprite forks.
+They also validate that the target checkout is stock WLED (`github.com/wled/WLED`) to avoid compiling against older custom forks.
 
 Windows:
 
