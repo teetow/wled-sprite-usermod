@@ -768,11 +768,6 @@ uint16_t computeMotionOffset(uint8_t speed, uint16_t segmentWidth, uint16_t spri
 byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame) {
   ensureInstanceLayout(state, seg, state.maxWidth, state.maxHeight);
   const uint16_t motionOffset = computeMotionOffset(seg.speed, seg.vWidth(), state.maxWidth);
-  const uint32_t renderKey = buildRenderKey(seg, state, motionOffset);
-  if (state.lastRenderKey == renderKey) {
-    noteSpriteDraw(0, 0, true);
-    return SPRITE_ERROR_NONE;
-  }
 
   SpriteRenderContext context;
   context.segment = &seg;
@@ -790,7 +785,8 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
 
   const uint32_t drawStart = micros();
   uint32_t blitPixels = 0;
-  seg.fill(BLACK);
+  // Preserve the already-rendered segment contents so PNG alpha blends over
+  // the real background instead of a freshly-cleared black rectangle.
   const auto *pixels = reinterpret_cast<const SpritePixel *>(getSpritePixelBlob(&state) + frame.dataOffset);
   for (uint16_t y = 0; y < frame.height; y++) {
     const SpritePixel *row = pixels + size_t(y) * frame.width;
@@ -820,7 +816,6 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
     }
   }
 
-  state.lastRenderKey = renderKey;
   noteSpriteDraw(micros() - drawStart, blitPixels, false);
   return SPRITE_ERROR_NONE;
 }
