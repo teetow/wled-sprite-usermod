@@ -95,6 +95,16 @@ Suggested starting points:
 | Sleet | White    | Blue-white  | Blue      | Medium     | Medium  | Low           | To taste | Medium       |
 | Hail  | White    | White       | Black     | Very high  | Low     | High          | Low   | Short        |
 
+## DitheredGradient controls
+
+`DitheredGradient` fills the matrix from the active WLED palette. It is useful as
+a palette-respecting background layer, such as a sky gradient.
+
+| WLED control | Label in UI | Description                                                                                   |
+| ------------ | ----------- | --------------------------------------------------------------------------------------------- |
+| Speed        | `Dither`    | Ordered dither strength. `0` renders a smooth palette gradient; higher values add more grain. |
+| Intensity    | `Rotation`  | Gradient direction. The default `0` is vertical; higher values rotate the gradient axis.       |
+
 ## Limits
 
 - Maximum frame size is 320 x 320 pixels.
@@ -112,6 +122,8 @@ Useful fields include:
 
 - `ready`: whether the effect registered successfully
 - `fxid`: runtime effect id assigned by WLED
+- `precip_fxid`: runtime effect id assigned to `Precipitation`
+- `dithered_gradient_fxid`: runtime effect id assigned to `DitheredGradient`
 - `active`: number of active segments using the effect
 - `bytes`: current sprite cache memory in use
 - `peak`: highest cache usage seen since boot
@@ -167,5 +179,6 @@ Deploy a previously built firmware image without rebuilding:
 ## Notes
 
 - Effect name in WLED: `Sprite`
+- Additional effect names in WLED: `Precipitation`, `DitheredGradient`
 - The current implementation is ESP32-only.
 - This repository intentionally does not include demo sprite assets.
