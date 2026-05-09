@@ -12,6 +12,10 @@ constexpr uint32_t SPRITE_STATE_MAGIC = 0x53505254UL;
 constexpr uint16_t SPRITE_MAX_DIMENSION = 320;
 constexpr uint16_t SPRITE_MAX_INSTANCES = 64;
 constexpr size_t SPRITE_CACHE_BUDGET = (MAX_SEGMENT_DATA > (12 * 1024)) ? (12 * 1024) : MAX_SEGMENT_DATA;
+constexpr uint32_t PRECIPITATION_STATE_MAGIC = 0x50524350UL;
+constexpr uint16_t PRECIPITATION_MAX_PARTICLES = 192;
+constexpr uint8_t PRECIPITATION_FP_SHIFT = 8;
+constexpr int16_t PRECIPITATION_FP_SCALE = 1 << PRECIPITATION_FP_SHIFT;
 constexpr byte SPRITE_ERROR_NONE = 0;
 constexpr byte SPRITE_ERROR_NO_NAME = 1;
 constexpr byte SPRITE_ERROR_UNSUPPORTED = 2;
@@ -98,6 +102,27 @@ struct SpriteCacheLoadContext {
   uint16_t height;
 };
 
+struct PrecipitationParticle {
+  int32_t x;
+  int32_t y;
+  int16_t vx;
+  int16_t vy;
+  uint8_t state;
+  uint8_t age;
+  uint8_t ttl;
+  uint8_t seed;
+} __attribute__((packed));
+
+struct PrecipitationState {
+  uint32_t magic;
+  uint32_t lastUpdate;
+  uint32_t prngState;
+  uint16_t width;
+  uint16_t height;
+  uint16_t particleCount;
+  uint16_t activeTarget;
+};
+
 class SpritePrng {
   public:
     explicit SpritePrng(uint32_t seed) : _state(seed ? seed : 0x9E3779B9UL) {}
@@ -117,10 +142,13 @@ class SpritePrng {
 static File spritePngFile;
 static SpriteStats spriteStats = {};
 static uint8_t spriteEffectId = 255;
+static uint8_t precipitationEffectId = 255;
 
 static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0";
+static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Splash radius,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=96,ix=128,c1=24,c2=128,c3=10";
 
 void modeSpriteUsermod();
+void modePrecipitationUsermod();
 void *spritePngOpen(const char *filename, int32_t *size);
 void spritePngClose(void *handle);
 int32_t spritePngRead(PNGFILE *handle, uint8_t *buffer, int32_t length);
@@ -161,6 +189,10 @@ inline uint8_t *getSpritePixelBlob(SpriteState *state) {
 
 inline const uint8_t *getSpritePixelBlob(const SpriteState *state) {
   return reinterpret_cast<const uint8_t *>(state) + state->pixelDataOffset;
+}
+
+inline PrecipitationParticle *getPrecipitationParticles(PrecipitationState *state) {
+  return reinterpret_cast<PrecipitationParticle *>(state + 1);
 }
 
 bool endsWithIgnoreCase(const char *value, const char *suffix) {
@@ -789,6 +821,189 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
   return SPRITE_ERROR_NONE;
 }
 
+uint16_t precipitationRandom(PrecipitationState &state, uint16_t upperExclusive) {
+  if (upperExclusive <= 1) return 0;
+  state.prngState ^= state.prngState << 13;
+  state.prngState ^= state.prngState >> 17;
+  state.prngState ^= state.prngState << 5;
+  return uint16_t(state.prngState % upperExclusive);
+}
+
+uint16_t getPrecipitationParticleCapacity(uint16_t width, uint16_t height) {
+  if (width == 0 || height == 0) return 0;
+  const uint32_t pixels = uint32_t(width) * height;
+  const uint16_t areaLimit = max<uint16_t>(8, min<uint32_t>(PRECIPITATION_MAX_PARTICLES, pixels / 3U + 6U));
+  const size_t memoryLimit = (MAX_SEGMENT_DATA > sizeof(PrecipitationState))
+    ? (MAX_SEGMENT_DATA - sizeof(PrecipitationState)) / sizeof(PrecipitationParticle)
+    : 0;
+  return min<uint16_t>(areaLimit, memoryLimit);
+}
+
+uint16_t getPrecipitationActiveTarget(const Segment &seg, uint16_t capacity) {
+  if (capacity == 0) return 0;
+  if (seg.intensity == 0) return 0;
+  return map(seg.intensity, 1, 255, 1, capacity);
+}
+
+bool ensurePrecipitationState(Segment &seg, PrecipitationState *&state) {
+  const uint16_t width = uint16_t(seg.vWidth());
+  const uint16_t height = uint16_t(seg.vHeight());
+  const uint16_t capacity = getPrecipitationParticleCapacity(width, height);
+  const size_t dataSize = sizeof(PrecipitationState) + size_t(capacity) * sizeof(PrecipitationParticle);
+
+  state = nullptr;
+  if (capacity == 0) return false;
+
+  if (seg.data) {
+    auto *existing = reinterpret_cast<PrecipitationState *>(seg.data);
+    if (existing->magic == PRECIPITATION_STATE_MAGIC && existing->width == width && existing->height == height && existing->particleCount == capacity) {
+      state = existing;
+      return true;
+    }
+  }
+
+  seg.deallocateData();
+  if (!seg.allocateData(dataSize)) return false;
+
+  state = reinterpret_cast<PrecipitationState *>(seg.data);
+  memset(state, 0, dataSize);
+  state->magic = PRECIPITATION_STATE_MAGIC;
+  state->lastUpdate = strip.now;
+  state->prngState = 0x9E3779B9UL ^ (uint32_t(width) << 16) ^ uint32_t(height) ^ strip.now;
+  state->width = width;
+  state->height = height;
+  state->particleCount = capacity;
+  return true;
+}
+
+void respawnPrecipitationParticle(PrecipitationState &state, PrecipitationParticle &particle, const Segment &seg, bool startAbove) {
+  const uint16_t width = max<uint16_t>(1, state.width);
+
+  particle.state = 1;
+  particle.age = 0;
+  particle.ttl = 0;
+  particle.seed = precipitationRandom(state, 255);
+  particle.x = int32_t(precipitationRandom(state, width) * PRECIPITATION_FP_SCALE + precipitationRandom(state, PRECIPITATION_FP_SCALE));
+  particle.y = startAbove
+    ? -int32_t(precipitationRandom(state, max<uint16_t>(1, state.height)) * PRECIPITATION_FP_SCALE)
+    : int32_t(precipitationRandom(state, max<uint16_t>(1, state.height)) * PRECIPITATION_FP_SCALE);
+  particle.vx = 0;
+  particle.vy = 0;
+}
+
+void updatePrecipitationMotion(PrecipitationParticle &particle, const Segment &seg) {
+  const uint8_t speedJitter = particle.seed >> 2;
+  const int16_t fallSpeed = seg.speed == 0 ? 0 : int16_t(map(seg.speed, 1, 255, 12, 190) + speedJitter);
+  const int16_t shear = int16_t(seg.custom2) - 128;
+  particle.vx = int16_t((int32_t)shear * max<int16_t>(8, fallSpeed) / 128);
+  particle.vy = fallSpeed;
+}
+
+void startPrecipitationSplash(PrecipitationState &state, PrecipitationParticle &particle, const Segment &seg) {
+  const uint8_t splashRadius = seg.custom1;
+  if (splashRadius == 0) {
+    respawnPrecipitationParticle(state, particle, seg, true);
+    return;
+  }
+
+  particle.state = 2;
+  particle.age = 0;
+  particle.ttl = 4 + (splashRadius >> 5);
+  particle.y = int32_t(state.height - 1) * PRECIPITATION_FP_SCALE;
+}
+
+void drawPrecipitationPixel(Segment &seg, int16_t x, int16_t y, uint32_t color, uint8_t alpha) {
+  if (alpha == 0 || (unsigned)x >= seg.vWidth() || (unsigned)y >= seg.vHeight()) return;
+  seg.blendPixelColorXY(x, y, color, alpha);
+}
+
+void drawPrecipitationParticle(Segment &seg, const PrecipitationParticle &particle) {
+  const int16_t headX = particle.x >> PRECIPITATION_FP_SHIFT;
+  const int16_t headY = particle.y >> PRECIPITATION_FP_SHIFT;
+  const uint8_t trailLength = seg.custom3;
+
+  if (particle.state == 2) {
+    const uint8_t maxRadius = max<uint8_t>(1, min<uint16_t>(31, max<uint16_t>(seg.vWidth(), seg.vHeight()) / 3U));
+    const uint8_t radius = map(seg.custom1, 0, 255, 0, maxRadius);
+    const uint8_t progress = particle.ttl ? min<uint8_t>(255, (uint16_t(particle.age) * 255U) / particle.ttl) : 255;
+    const uint8_t currentRadius = max<uint8_t>(1, (uint16_t(radius) * progress) / 255U);
+    const uint8_t alpha = 255 - progress;
+
+    for (int16_t dx = -currentRadius; dx <= currentRadius; dx++) {
+      const uint8_t distance = abs(dx);
+      const uint8_t localAlpha = (uint16_t(alpha) * (currentRadius + 1U - distance)) / (currentRadius + 1U);
+      drawPrecipitationPixel(seg, headX + dx, headY, SEGCOLOR(0), localAlpha);
+      if (distance > 0 && currentRadius > 2) drawPrecipitationPixel(seg, headX + dx, headY - 1, SEGCOLOR(1), localAlpha >> 1);
+    }
+    return;
+  }
+
+  if (trailLength > 0 && particle.vy != 0) {
+    const int16_t denom = max<int16_t>(1, abs(particle.vy));
+    for (uint8_t index = trailLength; index > 0; index--) {
+      const int16_t trailX = headX - int16_t((int32_t(particle.vx) * index) / denom);
+      const int16_t trailY = headY - index;
+      const uint8_t blend = (uint16_t(index) * 255U) / trailLength;
+      const uint32_t trailColor = color_blend(SEGCOLOR(1), SEGCOLOR(2), blend);
+      const uint8_t alpha = 255 - blend;
+      drawPrecipitationPixel(seg, trailX, trailY, trailColor, alpha);
+    }
+  }
+
+  drawPrecipitationPixel(seg, headX, headY, SEGCOLOR(0), 255);
+}
+
+void updatePrecipitationParticle(PrecipitationState &state, PrecipitationParticle &particle, const Segment &seg, uint16_t index, uint16_t activeTarget, uint16_t deltaMs) {
+  if (index >= activeTarget) {
+    particle.state = 0;
+    return;
+  }
+
+  if (particle.state == 0) {
+    respawnPrecipitationParticle(state, particle, seg, false);
+    return;
+  }
+
+  if (particle.state == 2) {
+    particle.age++;
+    if (particle.age >= particle.ttl) respawnPrecipitationParticle(state, particle, seg, true);
+    return;
+  }
+
+  updatePrecipitationMotion(particle, seg);
+  if (seg.speed == 0) return;
+
+  const int32_t moveX = (int32_t(particle.vx) * deltaMs * PRECIPITATION_FP_SCALE) / 1000L;
+  const int32_t moveY = (int32_t(particle.vy) * deltaMs * PRECIPITATION_FP_SCALE) / 1000L;
+  particle.x += moveX;
+  particle.y += moveY;
+
+  const int32_t maxX = int32_t(state.width) * PRECIPITATION_FP_SCALE;
+  while (particle.x < 0) particle.x += maxX;
+  while (particle.x >= maxX) particle.x -= maxX;
+
+  if (particle.y >= int32_t(state.height) * PRECIPITATION_FP_SCALE) startPrecipitationSplash(state, particle, seg);
+}
+
+void renderPrecipitationToSegment(Segment &seg) {
+  PrecipitationState *state = nullptr;
+  if (!ensurePrecipitationState(seg, state) || !state) {
+    seg.fill(BLACK);
+    return;
+  }
+
+  uint16_t deltaMs = min<uint32_t>(100, strip.now - state->lastUpdate);
+  state->lastUpdate = strip.now;
+  state->activeTarget = getPrecipitationActiveTarget(seg, state->particleCount);
+
+  seg.fill(BLACK);
+  PrecipitationParticle *particles = getPrecipitationParticles(state);
+  for (uint16_t index = 0; index < state->particleCount; index++) {
+    updatePrecipitationParticle(*state, particles[index], seg, index, state->activeTarget, deltaMs);
+    if (particles[index].state != 0) drawPrecipitationParticle(seg, particles[index]);
+  }
+}
+
 void resetSpriteRuntime(Segment &seg) {
   auto *state = getSpriteState(seg);
   if (!state) return;
@@ -813,6 +1028,7 @@ void addSpriteInfo(JsonObject &root) {
   JsonObject spriteInfo = root.createNestedObject(F("sprite_usermod"));
   spriteInfo[F("ready")] = spriteEffectId != 255;
   spriteInfo[F("fxid")] = spriteEffectId;
+  spriteInfo[F("precip_fxid")] = precipitationEffectId;
   spriteInfo[F("mode")] = F("cache");
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
   spriteInfo[F("active")] = getActiveSpriteSegments();
@@ -833,8 +1049,8 @@ void addSpriteInfo(JsonObject &root) {
 }
 
 void registerEffect() {
-  if (spriteEffectId != 255) return;
-  spriteEffectId = strip.addEffect(255, &modeSpriteUsermod, _data_FX_MODE_SPRITE);
+  if (spriteEffectId == 255) spriteEffectId = strip.addEffect(255, &modeSpriteUsermod, _data_FX_MODE_SPRITE);
+  if (precipitationEffectId == 255) precipitationEffectId = strip.addEffect(255, &modePrecipitationUsermod, _data_FX_MODE_PRECIPITATION);
 }
 
 void modeSpriteUsermod() {
@@ -844,6 +1060,14 @@ void modeSpriteUsermod() {
   }
   if (SEGENV.call == 0) resetSpriteRuntime(SEGMENT);
   if (renderUsermodSpriteToSegment(SEGMENT) != SPRITE_ERROR_NONE) SEGMENT.fill(SEGCOLOR(0));
+}
+
+void modePrecipitationUsermod() {
+  if (!strip.isMatrix || !SEGMENT.is2D()) {
+    SEGMENT.fill(SEGCOLOR(0));
+    return;
+  }
+  renderPrecipitationToSegment(SEGMENT);
 }
 
 } // namespace sprite_usermod

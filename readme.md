@@ -1,8 +1,12 @@
 # wled-sprite-usermod
 
-`Sprite` is a standalone WLED usermod that renders a PNG sprite or a
-JSON-defined animation on a 2D segment. The asset is selected from the segment
-name, decoded once, then cached for playback.
+`Sprite` is a standalone WLED usermod that adds two 2D effects:
+
+- `Sprite` renders a PNG sprite or a JSON-defined animation on a 2D segment.
+  The asset is selected from the segment name, decoded once, then cached for
+  playback.
+- `Precipitation` renders procedural falling particles for rain, snow, sleet,
+  hail, sparks, or any other color-driven shower.
 
 ## Supported targets
 
@@ -10,7 +14,7 @@ name, decoded once, then cached for playback.
 - 2D segments or matrix layouts only
 - PNG assets or JSON animation definitions stored on the WLED filesystem
 
-This effect does not render on 1D segments.
+These effects do not render on 1D segments.
 
 ## Installation
 
@@ -59,7 +63,7 @@ A plain name like `cloud.png` is equivalent to `/cloud.png`.
 If the segment name is empty, unsupported, or points to a missing file, the
 effect falls back to a blank segment.
 
-## Effect controls
+## Sprite controls
 
 | WLED control | Label in UI           | Description                                                                                                                                                     |
 | ------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -68,6 +72,28 @@ effect falls back to a blank segment.
 | Check 1      | `Mask`                | Ignores the PNG RGB colors and uses sprite alpha as a stencil over the segment's primary color.                                                                 |
 | Check 2      | `Gradient`            | Only applies when `Mask` is enabled. Fills masked pixels from the active palette instead of a flat primary color.                                               |
 | Check 3      | `Horizontal Gradient` | Only applies when `Gradient` is enabled. Uses a horizontal palette axis instead of a vertical one.                                                              |
+
+## Precipitation controls
+
+| WLED control | Label in UI     | Description                                                                                                             |
+| ------------ | --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Color 1      | `Particle`      | Particle head color. Use white for snow or hail, blue-white for rain, or any custom color.                              |
+| Color 2      | `Trail start`   | Trail color nearest the particle head.                                                                                  |
+| Color 3      | `Trail end`     | Trail color at the end of the fade.                                                                                     |
+| Speed        | `Fall speed`    | Downward particle speed. `0` freezes the particles in place.                                                            |
+| Intensity    | `Density`       | Active particle density. `0` disables particles; higher values increase the active particle count.                       |
+| Custom 1     | `Splash radius` | Impact splash radius. `0` disables splashes, which works well for snow.                                                 |
+| Custom 2     | `Shear`         | Horizontal travel / wind angle. The midpoint is vertical fall; lower and higher values push particles left or right.     |
+| Custom 3     | `Trail length`  | Trail length in pixels. WLED stores this slider at reduced 0-31 resolution, so the maximum trail is roughly 31 pixels.   |
+
+Suggested starting points:
+
+| Look  | Particle | Trail start | Trail end | Fall speed | Density | Splash radius | Shear | Trail length |
+| ----- | -------- | ----------- | --------- | ---------- | ------- | ------------- | ----- | ------------ |
+| Rain  | Pale blue | Blue        | Black     | High       | Medium  | Low-medium    | To taste | Medium-high |
+| Snow  | White    | White       | Black     | Low        | Medium  | 0             | Gentle | Short        |
+| Sleet | White    | Blue-white  | Blue      | Medium     | Medium  | Low           | To taste | Medium       |
+| Hail  | White    | White       | Black     | Very high  | Low     | High          | Low   | Short        |
 
 ## Limits
 
