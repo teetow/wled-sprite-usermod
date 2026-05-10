@@ -711,6 +711,11 @@ void blendSpritePixel(const SpriteRenderContext &context, int16_t destX, int16_t
   if ((unsigned)destX >= context.segmentWidth || (unsigned)destY >= context.segmentHeight) return;
 
   const uint32_t outputColor = context.useMask ? getMaskColor(context, destX, destY) : sourceColor;
+  if (context.segment->blendMode == 17) {
+    context.segment->setPixelColorXY(destX, destY, RGBW32(R(outputColor), G(outputColor), B(outputColor), alpha));
+    return;
+  }
+
   context.segment->blendPixelColorXY(destX, destY, outputColor, alpha);
 }
 
@@ -783,10 +788,18 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
   context.moving = seg.speed > 0 && state.maxWidth <= seg.vWidth();
   context.instances = getSpriteInstances(&state);
 
+  const uint32_t renderKey = buildRenderKey(seg, state, motionOffset);
+  if (renderKey == state.lastRenderKey) {
+    noteSpriteDraw(0, 0, true);
+    return SPRITE_ERROR_NONE;
+  }
+
   const uint32_t drawStart = micros();
   uint32_t blitPixels = 0;
+  if (context.segment->blendMode == 17) context.segment->fill(0);
   // Preserve the already-rendered segment contents so PNG alpha blends over
-  // the real background instead of a freshly-cleared black rectangle.
+  // the current segment buffer. Alpha-over mode clears above and stores PNG
+  // alpha in W for WLED's final segment compositor.
   const auto *pixels = reinterpret_cast<const SpritePixel *>(getSpritePixelBlob(&state) + frame.dataOffset);
   for (uint16_t y = 0; y < frame.height; y++) {
     const SpritePixel *row = pixels + size_t(y) * frame.width;
@@ -816,6 +829,7 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
     }
   }
 
+  state.lastRenderKey = renderKey;
   noteSpriteDraw(micros() - drawStart, blitPixels, false);
   return SPRITE_ERROR_NONE;
 }
