@@ -41,9 +41,11 @@ function Assert-StockWledCheckout {
     throw "Could not read git origin remote from: $RepoPath"
   }
 
+  # Accept any WLED fork (github.com/<owner>/WLED). The check exists to catch a
+  # totally unrelated repo, not to lock the build to upstream — forks are fine.
   $normalized = $originUrl.ToLowerInvariant()
-  if ($normalized -notmatch '(github\.com[:/])wled/wled(\.git)?$') {
-    throw "Expected stock WLED origin (github.com/wled/WLED), got: $originUrl"
+  if ($normalized -notmatch '(github\.com[:/])[^/]+/wled(\.git)?$') {
+    throw "Expected a WLED fork (github.com/<owner>/WLED), got: $originUrl"
   }
 }
 

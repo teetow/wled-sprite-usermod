@@ -32,8 +32,8 @@ if [[ -z "$ORIGIN_URL" ]]; then
   exit 1
 fi
 
-if [[ ! "${ORIGIN_URL,,}" =~ (github\.com[:/])wled/wled(\.git)?$ ]]; then
-  echo "Expected stock WLED origin (github.com/wled/WLED), got: $ORIGIN_URL" >&2
+if [[ ! "${ORIGIN_URL,,}" =~ (github\.com[:/])[^/]+/wled(\.git)?$ ]]; then
+  echo "Expected a WLED fork (github.com/<owner>/WLED), got: $ORIGIN_URL" >&2
   exit 1
 fi
 
