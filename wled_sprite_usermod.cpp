@@ -17,6 +17,9 @@ constexpr uint16_t PRECIPITATION_MAX_PARTICLES = 192;
 constexpr uint8_t PRECIPITATION_FP_SHIFT = 8;
 constexpr int16_t PRECIPITATION_FP_SCALE = 1 << PRECIPITATION_FP_SHIFT;
 constexpr float DITHERED_GRADIENT_TWO_PI = 6.28318530718f;
+constexpr float STARFIELD_DEFAULT_RATE = 1.6f;
+constexpr float STARFIELD_MIN_FADE = 0.18f;
+constexpr float STARFIELD_FADE_SPAN = 0.82f;
 constexpr byte SPRITE_ERROR_NONE = 0;
 constexpr byte SPRITE_ERROR_NO_NAME = 1;
 constexpr byte SPRITE_ERROR_UNSUPPORTED = 2;
@@ -145,14 +148,17 @@ static SpriteStats spriteStats = {};
 static uint8_t spriteEffectId = 255;
 static uint8_t precipitationEffectId = 255;
 static uint8_t ditheredGradientEffectId = 255;
+static uint8_t starfieldEffectId = 255;
 
 static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0";
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Splash radius,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=96,ix=128,c1=24,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
+static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Density,,,,Gradient;;!;2;sx=128,ix=160";
 
 void modeSpriteUsermod();
 void modePrecipitationUsermod();
 void modeDitheredGradientUsermod();
+void modeStarfieldUsermod();
 void *spritePngOpen(const char *filename, int32_t *size);
 void spritePngClose(void *handle);
 int32_t spritePngRead(PNGFILE *handle, uint8_t *buffer, int32_t length);
@@ -766,7 +772,10 @@ int32_t spritePngSeek(PNGFILE *handle, int32_t position) {
 
 uint16_t computeMotionOffset(uint8_t speed, uint16_t segmentWidth, uint16_t spriteWidth) {
   if (speed == 0 || segmentWidth == 0 || spriteWidth > segmentWidth) return 0;
-  const uint16_t pixelsPerSecond = map(speed, 1, 255, 4, 128);
+  // sx=0 freezes, sx=1 should already feel like a *very* gentle drift — 1 px/sec
+  // gives ~32 seconds to cross a 32-wide panel, which is roughly right for
+  // ~2 m/s wind. Top end stays at 128 px/sec for storm-level wind.
+  const uint16_t pixelsPerSecond = map(speed, 1, 255, 1, 128);
   return ((strip.now * pixelsPerSecond) / 1000U) % segmentWidth;
 }
 
@@ -1066,6 +1075,85 @@ void renderDitheredGradientToSegment(Segment &seg) {
   }
 }
 
+// Mixes (starIndex, variant, panel size) into a 32-bit hash. Stable across
+// calls so a given segment always lays its stars in the same spots; varies
+// with width/height so different panels produce different layouts.
+uint32_t starfieldHash(uint16_t starIndex, uint8_t variant, uint16_t width, uint16_t height) {
+  uint32_t h = 0x9E3779B9UL;
+  h ^= uint32_t(starIndex) << 1;
+  h *= 0x85EBCA6BUL;
+  h ^= uint32_t(variant) << 8;
+  h *= 0xC2B2AE35UL;
+  h ^= uint32_t(width) << 5;
+  h *= 0x27D4EB2FUL;
+  h ^= uint32_t(height);
+  h ^= h >> 16;
+  h *= 0x85EBCA6BUL;
+  h ^= h >> 13;
+  return h;
+}
+
+void renderStarfieldGradient(Segment &seg, uint16_t width, uint16_t height) {
+  // Vertical palette gradient — escape hatch for using the starfield seg as a
+  // plain sky backdrop without bringing in a second effect.
+  for (uint16_t y = 0; y < height; y++) {
+    const uint8_t paletteIndex = (height <= 1) ? 0 : uint8_t((uint32_t(y) * 255U) / (height - 1U));
+    const uint32_t color = seg.color_from_palette(paletteIndex, false, false, 0);
+    for (uint16_t x = 0; x < width; x++) {
+      seg.setPixelColorXY(x, y, color);
+    }
+  }
+}
+
+void renderStarfieldToSegment(Segment &seg) {
+  const uint16_t width = uint16_t(seg.vWidth());
+  const uint16_t height = uint16_t(seg.vHeight());
+  if (width == 0 || height == 0) return;
+
+  // check1 = "Gradient" override — paints a static palette gradient instead of stars.
+  if (seg.check1) {
+    renderStarfieldGradient(seg, width, height);
+    return;
+  }
+
+  seg.fill(BLACK);
+  if (seg.intensity == 0) return;
+
+  // Density: ix maps to 1..(pixels/16), matching the raster reference's ~6% coverage
+  // at full slider. At default ix=160 a 32x10 segment renders ~13 stars.
+  const uint32_t pixels = uint32_t(width) * height;
+  const uint16_t maxStars = max<uint16_t>(1, uint16_t(pixels / 16U));
+  const uint16_t starCount = uint16_t(1U + map(seg.intensity, 1, 255, 0, max<uint16_t>(0, maxStars - 1U)));
+
+  // Twinkle rate: sx=128 reproduces the legacy raster's 1.6 rad/s pulse, which
+  // is the "spot on" feel the renderer originally landed on.
+  const float rate = (float(seg.speed) / 128.0f) * STARFIELD_DEFAULT_RATE;
+  const float timeS = float(strip.now) / 1000.0f;
+
+  const uint32_t baseColor = SEGCOLOR(0);
+
+  for (uint16_t i = 0; i < starCount; i++) {
+    const uint32_t hx = starfieldHash(i, 0, width, height);
+    const uint32_t hy = starfieldHash(i, 1, width, height);
+    const uint32_t hs = starfieldHash(i, 2, width, height);
+    const uint16_t x = uint16_t(hx % width);
+    const uint16_t y = uint16_t(hy % height);
+    const float seed = float(hs & 0x3FF) / 1024.0f;
+
+    // sin(time * rate + seed * 9) * 0.5 + 0.5 → 0..1, then re-mapped to 0.18..1.0
+    // alpha so even the dimmest twinkle stays faintly visible (matches raster).
+    const float twinkle = sinf(timeS * rate + seed * 9.0f) * 0.5f + 0.5f;
+    const float fade = STARFIELD_MIN_FADE + twinkle * STARFIELD_FADE_SPAN;
+    const uint8_t alpha = uint8_t(constrain(int16_t(fade * 255.0f + 0.5f), 0, 255));
+
+    if (seg.blendMode == 17) {
+      seg.setPixelColorXY(x, y, RGBW32(R(baseColor), G(baseColor), B(baseColor), alpha));
+    } else {
+      seg.blendPixelColorXY(x, y, baseColor, alpha);
+    }
+  }
+}
+
 void resetSpriteRuntime(Segment &seg) {
   auto *state = getSpriteState(seg);
   if (!state) return;
@@ -1092,6 +1180,7 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("fxid")] = spriteEffectId;
   spriteInfo[F("precip_fxid")] = precipitationEffectId;
   spriteInfo[F("dithered_gradient_fxid")] = ditheredGradientEffectId;
+  spriteInfo[F("starfield_fxid")] = starfieldEffectId;
   spriteInfo[F("mode")] = F("cache");
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
   spriteInfo[F("active")] = getActiveSpriteSegments();
@@ -1115,6 +1204,7 @@ void registerEffect() {
   if (spriteEffectId == 255) spriteEffectId = strip.addEffect(255, &modeSpriteUsermod, _data_FX_MODE_SPRITE);
   if (precipitationEffectId == 255) precipitationEffectId = strip.addEffect(255, &modePrecipitationUsermod, _data_FX_MODE_PRECIPITATION);
   if (ditheredGradientEffectId == 255) ditheredGradientEffectId = strip.addEffect(255, &modeDitheredGradientUsermod, _data_FX_MODE_DITHERED_GRADIENT);
+  if (starfieldEffectId == 255) starfieldEffectId = strip.addEffect(255, &modeStarfieldUsermod, _data_FX_MODE_STARFIELD);
 }
 
 void modeSpriteUsermod() {
@@ -1140,6 +1230,14 @@ void modeDitheredGradientUsermod() {
     return;
   }
   renderDitheredGradientToSegment(SEGMENT);
+}
+
+void modeStarfieldUsermod() {
+  if (!strip.isMatrix || !SEGMENT.is2D()) {
+    SEGMENT.fill(SEGCOLOR(0));
+    return;
+  }
+  renderStarfieldToSegment(SEGMENT);
 }
 
 } // namespace sprite_usermod

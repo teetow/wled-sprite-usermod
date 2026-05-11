@@ -95,6 +95,21 @@ Suggested starting points:
 | Sleet | White    | Blue-white  | Blue      | Medium     | Medium  | Low           | To taste | Medium       |
 | Hail  | White    | White       | Black     | Very high  | Low     | High          | Low   | Short        |
 
+## Starfield controls
+
+`Starfield` paints procedural twinkling stars over the segment, recreating the
+twinkle animation from the Blaster rasterizer. Star positions are deterministic
+per segment, so the same panel always lights the same stars; each star pulses
+on its own phase via `sin(t * rate + seed * 9) * 0.5 + 0.5`, then maps to
+`0.18..1.0` alpha so even the dimmest twinkle stays faintly visible.
+
+| WLED control | Label in UI       | Description                                                                                                  |
+| ------------ | ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| Color 1      | (primary star)    | Star color. The starfield paints every twinkle in this color (or palette if `Gradient` is enabled).          |
+| Speed        | `Twinkle speed`   | Twinkle pulse rate. `128` reproduces the rasterizer's 1.6 rad/s feel; lower slows the pulse, higher speeds it up. |
+| Intensity    | `Density`         | Number of visible stars. `0` blanks the segment; full slider caps at roughly `pixels / 16` stars (~6% coverage). |
+| Check 1      | `Gradient`        | Overrides the twinkles with a static vertical palette gradient — useful if you want to repurpose the seg as a sky backdrop. |
+
 ## DitheredGradient controls
 
 `DitheredGradient` fills the matrix from the active WLED palette. It is useful as
@@ -124,6 +139,7 @@ Useful fields include:
 - `fxid`: runtime effect id assigned by WLED
 - `precip_fxid`: runtime effect id assigned to `Precipitation`
 - `dithered_gradient_fxid`: runtime effect id assigned to `DitheredGradient`
+- `starfield_fxid`: runtime effect id assigned to `Starfield`
 - `active`: number of active segments using the effect
 - `bytes`: current sprite cache memory in use
 - `peak`: highest cache usage seen since boot
@@ -179,6 +195,6 @@ Deploy a previously built firmware image without rebuilding:
 ## Notes
 
 - Effect name in WLED: `Sprite`
-- Additional effect names in WLED: `Precipitation`, `DitheredGradient`
+- Additional effect names in WLED: `Precipitation`, `DitheredGradient`, `Starfield`
 - The current implementation is ESP32-only.
 - This repository intentionally does not include demo sprite assets.
