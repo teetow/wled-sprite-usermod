@@ -81,7 +81,8 @@ uint8_t precipitationSplashAgeStep(const Segment &seg, uint16_t deltaMs) {
   if (baseFall <= 0 || deltaMs == 0) return 0;
 
   const uint32_t numerator = uint32_t(deltaMs) * uint32_t(baseFall) * PRECIPITATION_SPLASH_TIME_SCALE;
-  const uint32_t denominator = uint32_t(PRECIPITATION_SPLASH_FRAME_MS) * PRECIPITATION_REFERENCE_FALL;
+  const uint32_t denominator =
+      uint32_t(PRECIPITATION_SPLASH_FRAME_MS) * PRECIPITATION_REFERENCE_FALL * PRECIPITATION_SPLASH_RATE_DIVIDER;
   const uint32_t step = max<uint32_t>(1U, (numerator + denominator / 2U) / denominator);
   return uint8_t(min<uint32_t>(255U, step));
 }
@@ -183,7 +184,7 @@ void drawPrecipitationParticle(Segment &seg, const PrecipitationParticle &partic
     //   - Splash gravity scales with the particle's fall speed: heavy rain
     //     produces snappy splashes, drizzle splashes hang in the air.
     //   - c1 (Bounciness) sets the initial upward velocity. c1=255 still caps
-    //     peak height around 5 pixels — at higher bounciness the visual reads
+    //     peak height around 2-3 pixels — at higher bounciness the visual reads
     //     as "hail".
     //   - Per-droplet seed jitter so droplets don't all jump in lockstep.
     //   - Horizontal spread fixed (no slider) — the old c1=Splash radius slot
@@ -198,11 +199,11 @@ void drawPrecipitationParticle(Segment &seg, const PrecipitationParticle &partic
     // drop's actual fall speed (which itself carries parallax — foreground
     // drops fall faster than background ones, so they also splash harder).
     // Bounciness adds a base kick; sx-driven speedKick adds proportional
-    // energy. Cap vy0 at 5 so the upward arc stays within the eye-line cap,
+    // energy. Cap vy0 at 3 so the splash stays compact against the ground line,
     // and let gravity scale up too so peak height stays bounded.
-    const int16_t baseVy0   = max<int16_t>(1, int16_t(bounciness) / 64);   // 1..3 (4 at 255)
-    const int16_t speedKick = max<int16_t>(0, (abs(particle.vy) - 16) / 16); // 0..3 (4 at vy≥80)
-    const int16_t vy0Max    = min<int16_t>(5, baseVy0 + speedKick);
+    const int16_t baseVy0   = max<int16_t>(1, int16_t(bounciness) / 128);  // 1..1 (2 at 255)
+    const int16_t speedKick = max<int16_t>(0, (abs(particle.vy) - 16) / 32); // 0..1 (1 at vy≥48)
+    const int16_t vy0Max    = min<int16_t>(3, baseVy0 + speedKick);
     // Splash gravity tied to fall speed for coherence. Default vy≈34 → g=2;
     // downpour vy=64 → g=4 (snappy); drizzle vy=4 → g=1 (hangs).
     const int16_t splashG   = max<int16_t>(1, abs(particle.vy) / 16);

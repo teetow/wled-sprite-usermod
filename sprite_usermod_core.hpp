@@ -13,6 +13,11 @@ constexpr uint8_t PRECIPITATION_SPLASH_TIME_SHIFT = 3;
 constexpr uint8_t PRECIPITATION_SPLASH_TIME_SCALE = 1 << PRECIPITATION_SPLASH_TIME_SHIFT;
 constexpr uint16_t PRECIPITATION_SPLASH_FRAME_MS = 1000 / 30;
 constexpr uint8_t PRECIPITATION_REFERENCE_FALL = 34;
+// Damps splash temporal evolution relative to fall speed. Splash still
+// scales with sx (Fall speed), but advances at 1/N of the rate the same
+// fall speed would push a falling particle. 2 → splash plays out at half
+// speed, keeps the visual a beat longer without bloating active particles.
+constexpr uint8_t PRECIPITATION_SPLASH_RATE_DIVIDER = 2;
 constexpr float DITHERED_GRADIENT_TWO_PI = 6.28318530718f;
 constexpr float STARFIELD_DEFAULT_RATE = 1.6f;
 constexpr float STARFIELD_MIN_FADE = 0.18f;
