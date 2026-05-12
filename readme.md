@@ -82,18 +82,22 @@ effect falls back to a blank segment.
 | Color 3      | `Trail end`     | Trail color at the end of the fade.                                                                                     |
 | Speed        | `Fall speed`    | Downward particle speed. `0` freezes the particles in place.                                                            |
 | Intensity    | `Density`       | Active particle density. `0` disables particles; higher values increase the active particle count.                       |
-| Custom 1     | `Splash radius` | Impact splash radius. `0` disables splashes, which works well for snow.                                                 |
+| Custom 1     | `Bounciness`    | Splash droplet peak height. `0` disables splashes entirely (drops just despawn — good for snow). Higher values jump higher and read more like hail; capped so peak height stays within ~5 pixels regardless of slider position. |
 | Custom 2     | `Shear`         | Horizontal travel / wind angle. The midpoint is vertical fall; lower and higher values push particles left or right.     |
 | Custom 3     | `Trail length`  | Trail length in pixels. WLED stores this slider at reduced 0-31 resolution, so the maximum trail is roughly 31 pixels.   |
 
 Suggested starting points:
 
-| Look  | Particle | Trail start | Trail end | Fall speed | Density | Splash radius | Shear | Trail length |
-| ----- | -------- | ----------- | --------- | ---------- | ------- | ------------- | ----- | ------------ |
-| Rain  | Pale blue | Blue        | Black     | High       | Medium  | Low-medium    | To taste | Medium-high |
-| Snow  | White    | White       | Black     | Low        | Medium  | 0             | Gentle | Short        |
-| Sleet | White    | Blue-white  | Blue      | Medium     | Medium  | Low           | To taste | Medium       |
-| Hail  | White    | White       | Black     | Very high  | Low     | High          | Low   | Short        |
+| Look  | Particle | Trail start | Trail end | Fall speed | Density | Bounciness | Shear | Trail length |
+| ----- | -------- | ----------- | --------- | ---------- | ------- | ---------- | ----- | ------------ |
+| Rain  | Pale blue | Blue        | Black     | Medium     | Medium  | Low-medium | To taste | Medium-high |
+| Snow  | White    | White       | Black     | Low        | Medium  | 0          | Gentle | Short        |
+| Sleet | White    | Blue-white  | Blue      | Medium     | Medium  | Low        | To taste | Medium       |
+| Hail  | White    | White       | Black     | Medium-high | Low    | High       | Low   | Short        |
+
+Setting `Trail end` to solid black makes the trail fade to fully transparent
+(alpha is what fades — the tail does not darken the background). For a tail
+that actually fades toward a color, pick any non-black value.
 
 ## Starfield controls
 
