@@ -35,6 +35,7 @@ struct SpriteFrameSpec {
   uint16_t durationMs;
   uint16_t width;
   uint16_t height;
+  bool flipX;
   char filename[WLED_MAX_SEGNAME_LEN + 2];
 };
 
@@ -43,6 +44,7 @@ struct SpriteFrame {
   uint16_t width;
   uint16_t height;
   uint32_t dataOffset;
+  bool flipX;
 };
 
 struct SpritePixel {
@@ -106,6 +108,7 @@ struct SpriteCacheLoadContext {
   SpritePixel *pixels;
   uint16_t width;
   uint16_t height;
+  bool flipX;
 };
 
 struct PrecipitationParticle {
@@ -152,7 +155,7 @@ static uint8_t precipitationEffectId = 255;
 static uint8_t ditheredGradientEffectId = 255;
 static uint8_t starfieldEffectId = 255;
 
-static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0";
+static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Frame offset jitter,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=0";
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
 static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Density,,,,Gradient;;!;2;sx=128,ix=160";

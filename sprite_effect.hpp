@@ -281,6 +281,7 @@ bool allocateSpriteState(Segment &seg, const char *assetName, const SpriteFrameS
     frames[frameIndex].width = specs[frameIndex].width;
     frames[frameIndex].height = specs[frameIndex].height;
     frames[frameIndex].dataOffset = dataOffset;
+    frames[frameIndex].flipX = specs[frameIndex].flipX;
     dataOffset += uint32_t(specs[frameIndex].width) * specs[frameIndex].height * sizeof(SpritePixel);
     if (specs[frameIndex].width > state->maxWidth) state->maxWidth = specs[frameIndex].width;
     if (specs[frameIndex].height > state->maxHeight) state->maxHeight = specs[frameIndex].height;
@@ -342,6 +343,7 @@ bool decodeSpriteCache(SpriteState &state, const SpriteFrameSpec *specs) {
     context.pixels = reinterpret_cast<SpritePixel *>(getSpritePixelBlob(&state) + frames[frameIndex].dataOffset);
     context.width = frames[frameIndex].width;
     context.height = frames[frameIndex].height;
+    context.flipX = frames[frameIndex].flipX;
 
     const int decodeResult = decoder->decode(&context, PNG_FAST_PALETTE);
     decoder->close();
@@ -424,6 +426,7 @@ byte loadAnimDef(Segment &seg, const char *assetName, SpriteState *&state) {
       return SPRITE_ERROR_BAD_ANIMDEF;
     }
     specs[frameIndex].durationMs = max<uint16_t>(1, frameJson["duration"] | 100);
+    specs[frameIndex].flipX = (frameJson["flip"] | false) || (frameJson["flipX"] | false) || (frameJson["flipped"] | false);
     frameIndex++;
   }
 
@@ -460,6 +463,21 @@ uint16_t currentFrameDuration(const SpriteState *state) {
   return frames[state->currentFrame].durationMs;
 }
 
+uint16_t initialAnimationFrameOffset(const Segment &seg, const SpriteState &state) {
+  if (state.frameCount <= 1 || seg.custom1 == 0) return 0;
+
+  const uint16_t maxOffset = state.frameCount - 1;
+  const uint16_t window = 1 + map(uint16_t(seg.custom1), 1, 255, 0, maxOffset);
+  uint32_t seed = hashString32(state.assetName);
+  seed ^= uint32_t(seg.start) << 20;
+  seed ^= uint32_t(seg.stop) << 12;
+  seed ^= uint32_t(seg.startY) << 6;
+  seed ^= uint32_t(seg.stopY);
+  seed ^= uint32_t(state.frameCount) << 27;
+  SpritePrng prng(seed);
+  return prng.random16(window);
+}
+
 inline uint32_t rotl32(uint32_t value, uint8_t shift) {
   return (value << shift) | (value >> (32 - shift));
 }
@@ -478,10 +496,11 @@ uint32_t buildRenderKey(const Segment &seg, const SpriteState &state, uint16_t m
   return key;
 }
 
-void updateAnimationFrame(SpriteState *state) {
+void updateAnimationFrame(const Segment &seg, SpriteState *state) {
   if (!state || state->frameCount <= 1) return;
 
   if (state->nextFrameTime == 0) {
+    state->currentFrame = initialAnimationFrameOffset(seg, *state);
     state->nextFrameTime = strip.now + currentFrameDuration(state);
     return;
   }
@@ -536,8 +555,9 @@ int spriteCacheWrite(PNGDRAW *pDraw) {
     uint32_t color = 0;
     uint8_t alpha = 0;
     if (!decodeSpritePixel(pDraw, pixelX, color, alpha) || alpha == 0) continue;
-    row[pixelX].color565 = rgb32To565(color);
-    row[pixelX].alpha = alpha;
+    const uint16_t destX = context->flipX ? uint16_t(context->width - 1 - pixelX) : uint16_t(pixelX);
+    row[destX].color565 = rgb32To565(color);
+    row[destX].alpha = alpha;
   }
 
   return 1;
@@ -600,10 +620,10 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
 
   const uint32_t drawStart = micros();
   uint32_t blitPixels = 0;
-  if (context.segment->blendMode == 17) context.segment->fill(0);
-  // Preserve the already-rendered segment contents so PNG alpha blends over
-  // the current segment buffer. Alpha-over mode clears above and stores PNG
-  // alpha in W for WLED's final segment compositor.
+  // Sprite segments own their segment buffer. Clear before each real draw so
+  // transparent pixels from the current frame do not leave stale pixels from a
+  // previous asset/frame behind.
+  context.segment->fill(0);
   const auto *pixels = reinterpret_cast<const SpritePixel *>(getSpritePixelBlob(&state) + frame.dataOffset);
   for (uint16_t y = 0; y < frame.height; y++) {
     const SpritePixel *row = pixels + size_t(y) * frame.width;
@@ -654,7 +674,7 @@ byte renderUsermodSpriteToSegment(Segment &seg) {
   if (stateResult != SPRITE_ERROR_NONE) return stateResult;
   if (!state || state->frameCount == 0) return SPRITE_ERROR_BAD_ANIMDEF;
 
-  updateAnimationFrame(state);
+  updateAnimationFrame(seg, state);
   const SpriteFrame *frames = getSpriteFrames(state);
   return drawSpriteFrame(seg, *state, frames[state->currentFrame]);
 }

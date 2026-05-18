@@ -50,13 +50,16 @@ For animations, create a JSON file that lists the frames and their durations:
 ```json
 [
   { "filename": "cloud-0.png", "duration": 120 },
-  { "filename": "cloud-1.png", "duration": 120 }
+  { "filename": "cloud-1.png", "duration": 120 },
+  { "filename": "cloud-1.png", "duration": 120, "flip": true }
 ]
 ```
 
 Then point the segment name at the JSON file instead, for example `cloud.json`.
 Filenames in the JSON may be relative to the JSON file location, or absolute.
 Missing `duration` defaults to `100` ms.
+Set `flip`, `flipX`, or `flipped` to mirror that frame horizontally without
+uploading a second PNG.
 
 The segment name is treated as a path from the root of the filesystem.
 A plain name like `cloud.png` is equivalent to `/cloud.png`.
@@ -67,8 +70,9 @@ effect falls back to a blank segment.
 
 | WLED control | Label in UI           | Description                                                                                                                                                     |
 | ------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Speed        | `Move speed`          | Horizontal movement speed. `0` keeps sprites stationary. Values above `0` map to roughly 4 to 128 pixels per second and wrap across the segment width.          |
+| Speed        | `Move speed`          | Horizontal movement speed. `0` keeps sprites stationary. Values above `0` map to roughly 1 to 128 pixels per second and wrap across the segment width.          |
 | Intensity    | `Instances`           | Number of sprite instances. Low values keep one centered sprite. Higher values increase instance count up to the maximum that fits the segment and sprite size. |
+| Custom 1     | `Frame offset jitter` | Randomizes the starting frame for animations. `0` starts all segments at frame 0; `255` can start anywhere in the animation.                                    |
 | Check 1      | `Mask`                | Ignores the PNG RGB colors and uses sprite alpha as a stencil over the segment's primary color.                                                                 |
 | Check 2      | `Gradient`            | Only applies when `Mask` is enabled. Fills masked pixels from the active palette instead of a flat primary color.                                               |
 | Check 3      | `Horizontal Gradient` | Only applies when `Gradient` is enabled. Uses a horizontal palette axis instead of a vertical one.                                                              |
