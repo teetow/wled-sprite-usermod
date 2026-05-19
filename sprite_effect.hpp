@@ -620,9 +620,13 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
 
   const uint32_t drawStart = micros();
   uint32_t blitPixels = 0;
-  // Sprite segments own their segment buffer. Clear before each real draw so
-  // transparent pixels from the current frame do not leave stale pixels from a
-  // previous asset/frame behind.
+  // Always clear the segment buffer before drawing the new frame. The segment
+  // buffer is the sprite's own scratchpad — WLED composites it over the panel
+  // framebuffer (which already holds the sky/background) using the segment's
+  // blend mode. Without this clear, pixels NOT touched by the current sprite
+  // retain values from prior renders or prior sprite assignments — manifests
+  // as residual ghosts (e.g. an old status-icon sprite showing through under a
+  // newly-assigned tree sprite, where the tree's alpha=0 pixels skip writes).
   context.segment->fill(0);
   const auto *pixels = reinterpret_cast<const SpritePixel *>(getSpritePixelBlob(&state) + frame.dataOffset);
   for (uint16_t y = 0; y < frame.height; y++) {
