@@ -2,7 +2,7 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "Build",
+			"label": "FX: Build",
 			"type": "shell",
 			"command": "pwsh",
 			"args": [
@@ -18,7 +18,7 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Deploy",
+			"label": "FX: Deploy",
 			"type": "shell",
 			"command": "pwsh",
 			"args": [
@@ -37,17 +37,14 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Build and Deploy",
+			"label": "FX: Build and Deploy",
 			"dependsOrder": "sequence",
 			"dependsOn": [
 				"Build",
 				"Deploy"
 			],
 			"problemMatcher": [],
-			"group": {
-				"kind": "build",
-				"isDefault": true
-			}
+			"group": "build"
 		}
 	]
 }
