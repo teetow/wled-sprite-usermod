@@ -234,9 +234,29 @@ size_t getSharedSpriteCacheBytes() {
 void clearSharedSpriteCacheEntry(SpriteSharedCacheEntry &entry) {
   if (entry.data) p_free(entry.data);
   entry.assetName[0] = '\0';
+  entry.cacheGeneration = 0;
   entry.data = nullptr;
   entry.dataSize = 0;
   entry.lastUsed = 0;
+}
+
+void clearSharedSpriteCache() {
+  for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
+    clearSharedSpriteCacheEntry(spriteSharedCache[index]);
+  }
+}
+
+void setSpriteCacheGeneration(uint32_t generation) {
+  if (generation == 0) generation = 1;
+  if (spriteCacheGeneration == generation) return;
+  spriteCacheGeneration = generation;
+  clearSharedSpriteCache();
+}
+
+void bumpSpriteCacheGeneration() {
+  uint32_t generation = spriteCacheGeneration + 1;
+  if (generation == 0) generation = 1;
+  setSpriteCacheGeneration(generation);
 }
 
 SpriteSharedCacheEntry *findSharedSpriteCacheEntry(const char *assetName) {
@@ -244,6 +264,10 @@ SpriteSharedCacheEntry *findSharedSpriteCacheEntry(const char *assetName) {
   for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
     SpriteSharedCacheEntry &entry = spriteSharedCache[index];
     if (!entry.data || entry.dataSize == 0) continue;
+    if (entry.cacheGeneration != spriteCacheGeneration) {
+      clearSharedSpriteCacheEntry(entry);
+      continue;
+    }
     if (strncmp(entry.assetName, assetName, sizeof(entry.assetName)) == 0) return &entry;
   }
   return nullptr;
@@ -300,6 +324,7 @@ void rememberSpriteStateInSharedCache(const char *assetName, const Segment &seg,
   memcpy(entry->data, seg.data, dataSize);
   entry->dataSize = dataSize;
   entry->lastUsed = ++spriteSharedCacheClock;
+  entry->cacheGeneration = spriteCacheGeneration;
   strlcpy(entry->assetName, assetName, sizeof(entry->assetName));
 }
 
@@ -334,6 +359,7 @@ void storeSpriteFailureState(Segment &seg, const char *assetName, byte errorCode
   memset(state, 0, sizeof(SpriteState));
   state->magic = SPRITE_STATE_MAGIC;
   strlcpy(state->assetName, assetName, sizeof(state->assetName));
+  state->cacheGeneration = spriteCacheGeneration;
   state->lastRenderKey = UINT32_MAX;
   state->lastError = errorCode;
 }
@@ -347,6 +373,7 @@ SpriteState *cloneSpriteStateFromPeer(Segment &target, const char *assetName) {
 
     const SpriteState *source = getSpriteState(peer);
     if (!source || source->lastError != SPRITE_ERROR_NONE || source->frameCount == 0) continue;
+    if (source->cacheGeneration != spriteCacheGeneration) continue;
     if (strncmp(source->assetName, assetName, sizeof(source->assetName)) != 0) continue;
 
     const size_t dataSize = peer.dataSize();
@@ -543,6 +570,7 @@ bool allocateSpriteState(Segment &seg, const char *assetName, const SpriteFrameS
   memset(state, 0, metadataBytes);
   state->magic = SPRITE_STATE_MAGIC;
   strlcpy(state->assetName, assetName, sizeof(state->assetName));
+  state->cacheGeneration = spriteCacheGeneration;
   state->frameCount = frameCount;
   state->pixelDataOffset = metadataBytes;
   state->cacheBytes = pixelBytes;
@@ -819,7 +847,7 @@ byte ensureSpriteState(Segment &seg, SpriteState *&state) {
   if (assetName[0] == '\0') return SPRITE_ERROR_NO_NAME;
 
   state = getSpriteState(seg);
-  if (state && strncmp(state->assetName, assetName, sizeof(state->assetName)) == 0) {
+  if (state && state->cacheGeneration == spriteCacheGeneration && strncmp(state->assetName, assetName, sizeof(state->assetName)) == 0) {
     return state->lastError == SPRITE_ERROR_NONE ? SPRITE_ERROR_NONE : state->lastError;
   }
 

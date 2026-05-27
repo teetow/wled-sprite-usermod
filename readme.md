@@ -71,6 +71,22 @@ A plain name like `cloud.png` is equivalent to `/cloud.png`.
 If the segment name is empty, unsupported, or points to a missing file, the
 effect falls back to a blank segment.
 
+Decoded sprite data is cached by filename and cache generation. To make a panel
+reload an overwritten file without changing the segment name, post this to
+WLED's JSON state API:
+
+```json
+{
+  "sprite_usermod": {
+    "clear_cache": true
+  }
+}
+```
+
+The command bumps the internal cache generation and clears the shared decoded
+cache. Existing sprite segments reload their current filenames on the next
+render.
+
 ## Sprite controls
 
 | WLED control | Label in UI           | Description                                                                                                                                                     |
@@ -156,6 +172,7 @@ Useful fields include:
 - `active`: number of active segments using the effect
 - `bytes`: current sprite cache memory in use
 - `peak`: highest cache usage seen since boot
+- `cache_generation`: current cache generation, incremented when the cache is cleared
 - `loads`: successful asset loads
 - `clones`: loads avoided by cloning another active segment's cache
 - `shared_hits`: loads avoided by restoring from the shared decoded cache

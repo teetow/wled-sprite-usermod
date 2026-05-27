@@ -22,6 +22,7 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("dithered_gradient_fxid")] = ditheredGradientEffectId;
   spriteInfo[F("starfield_fxid")] = starfieldEffectId;
   spriteInfo[F("mode")] = F("cache");
+  spriteInfo[F("cache_generation")] = spriteCacheGeneration;
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
   spriteInfo[F("active")] = getActiveSpriteSegments();
   spriteInfo[F("bytes")] = getActiveSpriteBytes();
@@ -40,6 +41,21 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("drawus")] = spriteStats.lastDrawUs;
   spriteInfo[F("drawmax")] = spriteStats.maxDrawUs;
   spriteInfo[F("err")] = spriteStats.lastError;
+}
+
+void readSpriteState(JsonObject &root) {
+  JsonObject spriteState = root[F("sprite_usermod")];
+  if (spriteState.isNull()) return;
+
+  if (spriteState[F("clear_cache")] | false) {
+    bumpSpriteCacheGeneration();
+    return;
+  }
+
+  JsonVariant epoch = spriteState[F("asset_epoch")];
+  if (!epoch.isNull()) {
+    setSpriteCacheGeneration(epoch.as<uint32_t>());
+  }
 }
 
 void registerEffect() {
@@ -94,6 +110,10 @@ class SpriteUsermod : public Usermod {
 
     void addToJsonInfo(JsonObject &root) override {
       sprite_usermod::addSpriteInfo(root);
+    }
+
+    void readFromJsonState(JsonObject &root) override {
+      sprite_usermod::readSpriteState(root);
     }
 };
 

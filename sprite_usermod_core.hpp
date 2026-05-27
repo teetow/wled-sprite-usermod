@@ -105,6 +105,7 @@ struct SpriteInstance {
 struct SpriteState {
   uint32_t magic;
   char assetName[WLED_MAX_SEGNAME_LEN + 2];
+  uint32_t cacheGeneration;
   uint16_t frameCount;
   uint16_t currentFrame;
   uint32_t nextFrameTime;
@@ -121,6 +122,7 @@ struct SpriteState {
 
 struct SpriteSharedCacheEntry {
   char assetName[WLED_MAX_SEGNAME_LEN + 2];
+  uint32_t cacheGeneration;
   byte *data;
   size_t dataSize;
   uint32_t lastUsed;
@@ -189,6 +191,7 @@ static File spritePngFile;
 static SpriteStats spriteStats = {};
 static SpriteSharedCacheEntry spriteSharedCache[SPRITE_SHARED_CACHE_SLOTS] = {};
 static uint32_t spriteSharedCacheClock = 0;
+static uint32_t spriteCacheGeneration = 1;
 static uint8_t spriteEffectId = 255;
 static uint8_t precipitationEffectId = 255;
 static uint8_t ditheredGradientEffectId = 255;

@@ -123,9 +123,23 @@ function Deploy-Firmware {
   Write-Host "Uploading firmware to $DeviceHost..."
 
   try {
-    $response = Invoke-WebRequest -Uri "http://$DeviceHost/update" -Method Post -Form @{
-      update = Get-Item -LiteralPath $Firmware
-    } -TimeoutSec 600
+    $invokeWebRequest = Get-Command Invoke-WebRequest
+    if ($invokeWebRequest.Parameters.ContainsKey('Form')) {
+      $response = Invoke-WebRequest -Uri "http://$DeviceHost/update" -Method Post -Form @{
+        update = Get-Item -LiteralPath $Firmware
+      } -TimeoutSec 600
+    }
+    else {
+      $curl = Get-Command curl.exe -ErrorAction Stop
+      $curlOutput = & $curl.Source -sS -f -F "update=@$Firmware" "http://$DeviceHost/update" 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        throw ($curlOutput -join "`n")
+      }
+      $response = [pscustomobject]@{
+        StatusCode = 200
+        Content = ($curlOutput -join "`n")
+      }
+    }
   }
   catch {
     $detail = $_.ErrorDetails.Message
