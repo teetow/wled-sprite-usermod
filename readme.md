@@ -12,7 +12,7 @@
 
 - ESP32 only
 - 2D segments or matrix layouts only
-- PNG assets or JSON animation definitions stored on the WLED filesystem
+- Packed `.spr` assets, PNG assets, or JSON animation definitions stored on the WLED filesystem
 
 These effects do not render on 1D segments.
 
@@ -42,8 +42,13 @@ For day-to-day development in this repo, use the helper scripts in the `Local de
 
 ## Usage
 
-1. Upload one or more PNG files to the WLED filesystem.
-2. Set the segment name to the filename, for example `cloud.png`.
+1. Upload a packed `.spr` file, PNG file, or JSON animation definition to the WLED filesystem.
+2. Set the segment name to the filename, for example `cloud.spr`.
+
+Packed `.spr` files are the preferred runtime format. They contain the frame
+table and RGB565+alpha pixel bytes the effect caches internally, so loading a
+sprite only requires validating the header and reading bytes from the
+filesystem. PNG and JSON loading remain supported as editable/debug fallbacks.
 
 For animations, create a JSON file that lists the frames and their durations:
 
@@ -70,9 +75,9 @@ effect falls back to a blank segment.
 
 | WLED control | Label in UI           | Description                                                                                                                                                     |
 | ------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Speed        | `Move speed`          | Horizontal movement speed. `0` keeps sprites stationary. Values above `0` map to roughly 1 to 128 pixels per second and wrap across the segment width.          |
-| Intensity    | `Instances`           | Number of sprite instances. Low values keep one centered sprite. Higher values increase instance count up to the maximum that fits the segment and sprite size. |
-| Custom 1     | `Frame offset jitter` | Randomizes the starting frame for animations. `0` starts all segments at frame 0; `255` can start anywhere in the animation.                                    |
+| Speed        | `Move speed`    | Horizontal movement speed. `0` keeps sprites stationary. Values above `0` map to roughly 1 to 128 pixels per second. Moving sprites make one full off-screen-to-off-screen traversal, then respawn. |
+| Intensity    | `Instances`     | Number of sprite instances. Low values keep one sprite. Higher values increase the moving spawn pool or stationary layout count up to the maximum that fits the segment and sprite size. |
+| Custom 1     | `Spawn jitter`  | Randomizes moving sprite spawn timing and row. For animations, it also randomizes the starting frame. `0` removes extra spawn delay/frame offset; `255` uses the widest jitter window. |
 | Check 1      | `Mask`                | Ignores the PNG RGB colors and uses sprite alpha as a stencil over the segment's primary color.                                                                 |
 | Check 2      | `Gradient`            | Only applies when `Mask` is enabled. Fills masked pixels from the active palette instead of a flat primary color.                                               |
 | Check 3      | `Horizontal Gradient` | Only applies when `Gradient` is enabled. Uses a horizontal palette axis instead of a vertical one.                                                              |
@@ -152,6 +157,8 @@ Useful fields include:
 - `bytes`: current sprite cache memory in use
 - `peak`: highest cache usage seen since boot
 - `loads`: successful asset loads
+- `clones`: loads avoided by cloning another active segment's cache
+- `shared_hits`: loads avoided by restoring from the shared decoded cache
 - `errors`: cumulative load failures
 - `err`: most recent error code
 
@@ -167,6 +174,7 @@ Error codes:
 | 5    | Memory allocation failure                        |
 | 6    | PNG open or decode failure                       |
 | 7    | Asset exceeds sprite cache budget or size limits |
+| 8    | Invalid packed `.spr` asset                      |
 
 ## Local development
 

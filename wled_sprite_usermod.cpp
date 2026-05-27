@@ -27,6 +27,8 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("bytes")] = getActiveSpriteBytes();
   spriteInfo[F("peak")] = spriteStats.peakCacheBytes;
   spriteInfo[F("loads")] = spriteStats.loads;
+  spriteInfo[F("clones")] = spriteStats.cacheClones;
+  spriteInfo[F("shared_hits")] = spriteStats.sharedCacheHits;
   spriteInfo[F("errors")] = spriteStats.loadErrors;
   spriteInfo[F("loadms")] = spriteStats.lastLoadMs;
   spriteInfo[F("frames")] = spriteStats.lastFrames;

@@ -24,6 +24,8 @@ uint16_t getPrecipitationActiveTarget(const Segment &seg, uint16_t capacity) {
   return map(seg.intensity, 1, 255, 1, capacity);
 }
 
+uint16_t precipitationDespawnY(uint8_t depth, uint16_t height);
+
 bool ensurePrecipitationState(Segment &seg, PrecipitationState *&state) {
   const uint16_t width = uint16_t(seg.vWidth());
   const uint16_t height = uint16_t(seg.vHeight());
@@ -57,15 +59,21 @@ bool ensurePrecipitationState(Segment &seg, PrecipitationState *&state) {
 
 void respawnPrecipitationParticle(PrecipitationState &state, PrecipitationParticle &particle, const Segment &seg, bool startAbove) {
   const uint16_t width = max<uint16_t>(1, state.width);
+  const uint16_t height = max<uint16_t>(1, state.height);
 
   particle.state = 1;
   particle.age = 0;
   particle.ttl = 0;
   particle.seed = precipitationRandom(state, 255);
   particle.x = int32_t(precipitationRandom(state, width) * PRECIPITATION_FP_SCALE + precipitationRandom(state, PRECIPITATION_FP_SCALE));
-  particle.y = startAbove
-    ? -int32_t(precipitationRandom(state, max<uint16_t>(1, state.height)) * PRECIPITATION_FP_SCALE)
-    : int32_t(precipitationRandom(state, max<uint16_t>(1, state.height)) * PRECIPITATION_FP_SCALE);
+  if (startAbove) {
+    particle.y = -int32_t((1U + precipitationRandom(state, height)) * PRECIPITATION_FP_SCALE + precipitationRandom(state, PRECIPITATION_FP_SCALE));
+  } else {
+    const uint16_t despawnY = max<uint16_t>(1, precipitationDespawnY(particle.seed, state.height));
+    const uint16_t span = max<uint16_t>(1, height + despawnY);
+    const int32_t yPixels = int32_t(precipitationRandom(state, span)) - int32_t(height);
+    particle.y = yPixels * PRECIPITATION_FP_SCALE + precipitationRandom(state, PRECIPITATION_FP_SCALE);
+  }
   particle.vx = 0;
   particle.vy = 0;
 }
@@ -245,6 +253,7 @@ void updatePrecipitationParticle(PrecipitationState &state, PrecipitationParticl
 
   if (particle.state == 0) {
     respawnPrecipitationParticle(state, particle, seg, false);
+    updatePrecipitationMotion(particle, seg);
     return;
   }
 

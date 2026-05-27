@@ -133,6 +133,16 @@ void noteSpriteLoad(uint16_t width, uint16_t height, uint16_t frames, uint32_t c
   spriteStats.lastError = SPRITE_ERROR_NONE;
 }
 
+void noteSpriteCacheClone() {
+  spriteStats.cacheClones++;
+  spriteStats.lastError = SPRITE_ERROR_NONE;
+}
+
+void noteSpriteSharedCacheHit() {
+  spriteStats.sharedCacheHits++;
+  spriteStats.lastError = SPRITE_ERROR_NONE;
+}
+
 void noteSpriteError(byte error) {
   if (error != SPRITE_ERROR_NONE) spriteStats.loadErrors++;
   spriteStats.lastError = error;
@@ -169,6 +179,185 @@ uint8_t getActiveSpriteSegments() {
   return activeSegments;
 }
 
+uint32_t spriteRuntimeSeed(const Segment &seg, const char *assetName) {
+  uint32_t seed = hashString32(assetName);
+  seed ^= uint32_t(seg.start) << 20;
+  seed ^= uint32_t(seg.stop) << 12;
+  seed ^= uint32_t(seg.startY) << 6;
+  seed ^= uint32_t(seg.stopY);
+  seed ^= strip.now;
+  seed ^= micros();
+  return seed ? seed : 0x9E3779B9UL;
+}
+
+void resetSpritePlaybackRuntime(SpriteState &state, const Segment &seg) {
+  state.layoutKey = 0;
+  state.lastRenderKey = UINT32_MAX;
+  state.nextFrameTime = 0;
+  state.prngState = spriteRuntimeSeed(seg, state.assetName);
+}
+
+uint32_t spriteStateRandomValue(SpriteState &state) {
+  state.prngState ^= state.prngState << 13;
+  state.prngState ^= state.prngState >> 17;
+  state.prngState ^= state.prngState << 5;
+  if (state.prngState == 0) state.prngState = 0x9E3779B9UL;
+  return state.prngState;
+}
+
+uint32_t spriteStateRandom(SpriteState &state, uint32_t upperExclusive) {
+  if (upperExclusive <= 1) return 0;
+  return spriteStateRandomValue(state) % upperExclusive;
+}
+
+size_t getSharedSpriteCacheBytes() {
+  size_t bytes = 0;
+  for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
+    bytes += spriteSharedCache[index].dataSize;
+  }
+  return bytes;
+}
+
+void clearSharedSpriteCacheEntry(SpriteSharedCacheEntry &entry) {
+  if (entry.data) p_free(entry.data);
+  entry.assetName[0] = '\0';
+  entry.data = nullptr;
+  entry.dataSize = 0;
+  entry.lastUsed = 0;
+}
+
+SpriteSharedCacheEntry *findSharedSpriteCacheEntry(const char *assetName) {
+  if (!assetName || assetName[0] == '\0') return nullptr;
+  for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
+    SpriteSharedCacheEntry &entry = spriteSharedCache[index];
+    if (!entry.data || entry.dataSize == 0) continue;
+    if (strncmp(entry.assetName, assetName, sizeof(entry.assetName)) == 0) return &entry;
+  }
+  return nullptr;
+}
+
+SpriteSharedCacheEntry *selectSharedSpriteCacheSlot(size_t dataSize) {
+  if (dataSize == 0 || dataSize > SPRITE_SHARED_CACHE_BUDGET) return nullptr;
+
+  while (getSharedSpriteCacheBytes() + dataSize > SPRITE_SHARED_CACHE_BUDGET) {
+    SpriteSharedCacheEntry *oldest = nullptr;
+    for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
+      SpriteSharedCacheEntry &entry = spriteSharedCache[index];
+      if (!entry.data) continue;
+      if (!oldest || entry.lastUsed < oldest->lastUsed) oldest = &entry;
+    }
+    if (!oldest) break;
+    clearSharedSpriteCacheEntry(*oldest);
+  }
+
+  for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
+    if (!spriteSharedCache[index].data) return &spriteSharedCache[index];
+  }
+
+  SpriteSharedCacheEntry *oldest = &spriteSharedCache[0];
+  for (uint8_t index = 1; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
+    if (spriteSharedCache[index].lastUsed < oldest->lastUsed) oldest = &spriteSharedCache[index];
+  }
+  clearSharedSpriteCacheEntry(*oldest);
+  return oldest;
+}
+
+void rememberSpriteStateInSharedCache(const char *assetName, const Segment &seg, const SpriteState *state) {
+  if (!assetName || !state || !seg.data) return;
+
+  const size_t dataSize = seg.dataSize();
+  if (dataSize == 0 || dataSize > SPRITE_SHARED_CACHE_BUDGET) return;
+
+  SpriteSharedCacheEntry *entry = findSharedSpriteCacheEntry(assetName);
+  if (entry && entry->dataSize != dataSize) {
+    clearSharedSpriteCacheEntry(*entry);
+    entry = nullptr;
+  }
+  if (!entry) entry = selectSharedSpriteCacheSlot(dataSize);
+  if (!entry) return;
+
+  if (!entry->data) {
+    entry->data = static_cast<byte *>(allocate_buffer(dataSize, BFRALLOC_PREFER_PSRAM));
+    if (!entry->data) {
+      clearSharedSpriteCacheEntry(*entry);
+      return;
+    }
+  }
+
+  memcpy(entry->data, seg.data, dataSize);
+  entry->dataSize = dataSize;
+  entry->lastUsed = ++spriteSharedCacheClock;
+  strlcpy(entry->assetName, assetName, sizeof(entry->assetName));
+}
+
+SpriteState *cloneSpriteStateFromSharedCache(Segment &target, const char *assetName) {
+  SpriteSharedCacheEntry *entry = findSharedSpriteCacheEntry(assetName);
+  if (!entry || !entry->data || entry->dataSize == 0) return nullptr;
+
+  target.deallocateData();
+  if (!target.allocateData(entry->dataSize)) return nullptr;
+
+  memcpy(target.data, entry->data, entry->dataSize);
+  SpriteState *clone = getSpriteState(target);
+  if (!clone) {
+    target.deallocateData();
+    return nullptr;
+  }
+
+  resetSpritePlaybackRuntime(*clone, target);
+  clone->lastError = SPRITE_ERROR_NONE;
+  entry->lastUsed = ++spriteSharedCacheClock;
+  noteSpriteSharedCacheHit();
+  return clone;
+}
+
+void storeSpriteFailureState(Segment &seg, const char *assetName, byte errorCode) {
+  if (!assetName || errorCode == SPRITE_ERROR_NONE) return;
+
+  seg.deallocateData();
+  if (!seg.allocateData(sizeof(SpriteState))) return;
+
+  auto *state = reinterpret_cast<SpriteState *>(seg.data);
+  memset(state, 0, sizeof(SpriteState));
+  state->magic = SPRITE_STATE_MAGIC;
+  strlcpy(state->assetName, assetName, sizeof(state->assetName));
+  state->lastRenderKey = UINT32_MAX;
+  state->lastError = errorCode;
+}
+
+SpriteState *cloneSpriteStateFromPeer(Segment &target, const char *assetName) {
+  if (!assetName || spriteEffectId == 255) return nullptr;
+
+  for (size_t index = 0; index < strip.getSegmentsNum(); index++) {
+    Segment &peer = strip.getSegment(index);
+    if (&peer == &target || !peer.isActive() || peer.mode != spriteEffectId) continue;
+
+    const SpriteState *source = getSpriteState(peer);
+    if (!source || source->lastError != SPRITE_ERROR_NONE || source->frameCount == 0) continue;
+    if (strncmp(source->assetName, assetName, sizeof(source->assetName)) != 0) continue;
+
+    const size_t dataSize = peer.dataSize();
+    if (dataSize == 0 || !peer.data) continue;
+
+    target.deallocateData();
+    if (!target.allocateData(dataSize)) return nullptr;
+
+    memcpy(target.data, peer.data, dataSize);
+    SpriteState *clone = getSpriteState(target);
+    if (!clone) {
+      target.deallocateData();
+      return nullptr;
+    }
+
+    resetSpritePlaybackRuntime(*clone, target);
+    clone->lastError = SPRITE_ERROR_NONE;
+    noteSpriteCacheClone();
+    return clone;
+  }
+
+  return nullptr;
+}
+
 uint16_t getMaxInstanceCount(uint16_t segmentWidth, uint16_t segmentHeight, uint16_t spriteWidth, uint16_t spriteHeight) {
   if (segmentWidth == 0 || segmentHeight == 0 || spriteWidth == 0 || spriteHeight == 0) return 1;
   if (spriteWidth >= segmentWidth || spriteHeight >= segmentHeight) return 1;
@@ -182,6 +371,67 @@ uint16_t getDesiredInstanceCount(const Segment &seg, uint16_t segmentWidth, uint
   const uint16_t maxInstances = getMaxInstanceCount(segmentWidth, segmentHeight, spriteWidth, spriteHeight);
   if (maxInstances <= 1) return 1;
   return 1 + map(seg.intensity, 0, 255, 0, maxInstances - 1);
+}
+
+bool spriteUsesMovingLifecycle(const Segment &seg, uint16_t segmentWidth, uint16_t spriteWidth) {
+  return seg.speed > 0 && segmentWidth > 0 && spriteWidth <= segmentWidth;
+}
+
+uint16_t spritePixelsPerSecond(uint8_t speed) {
+  if (speed == 0) return 0;
+  // sx=1 should already feel like a very gentle drift. Top end stays fast
+  // enough for storm-level wind without making low wind look twitchy.
+  return map(speed, 1, 255, 1, 128);
+}
+
+uint32_t computeSpriteTravelMs(uint8_t speed, uint16_t segmentWidth, uint16_t spriteWidth) {
+  const uint16_t pixelsPerSecond = spritePixelsPerSecond(speed);
+  if (pixelsPerSecond == 0) return 0;
+  const uint32_t travelPixels = uint32_t(segmentWidth) + uint32_t(spriteWidth);
+  return max<uint32_t>(1U, (travelPixels * 1000U + pixelsPerSecond - 1U) / pixelsPerSecond);
+}
+
+uint32_t computeSpriteSpawnDelayWindowMs(const Segment &seg, uint32_t travelMs, uint16_t instanceCount) {
+  if (seg.custom1 == 0 || travelMs == 0 || instanceCount == 0) return 0;
+  const uint32_t spacingMs = max<uint32_t>(250U, travelMs / max<uint16_t>(1, instanceCount));
+  return (spacingMs * uint32_t(seg.custom1)) / 255U;
+}
+
+void scheduleMovingSpriteInstance(SpriteState &state, SpriteInstance &instance, const Segment &seg,
+                                  uint16_t segmentWidth, uint16_t segmentHeight,
+                                  uint16_t spriteWidth, uint16_t spriteHeight,
+                                  uint16_t instanceCount, bool seedInFlight) {
+  const uint16_t maxY = (segmentHeight > spriteHeight) ? segmentHeight - spriteHeight : 0;
+  const uint32_t travelMs = computeSpriteTravelMs(seg.speed, segmentWidth, spriteWidth);
+  const uint32_t delayWindowMs = computeSpriteSpawnDelayWindowMs(seg, travelMs, instanceCount);
+
+  instance.x = -int16_t(spriteWidth);
+  instance.y = int16_t(spriteStateRandom(state, uint32_t(maxY) + 1U));
+
+  if (seedInFlight && travelMs > 0) {
+    const uint32_t cycleMs = max<uint32_t>(1U, travelMs + delayWindowMs);
+    const uint32_t phaseMs = spriteStateRandom(state, cycleMs);
+    instance.spawnTime = phaseMs < travelMs
+      ? strip.now - phaseMs
+      : strip.now + (cycleMs - phaseMs);
+    return;
+  }
+
+  const uint32_t delayMs = delayWindowMs ? spriteStateRandom(state, delayWindowMs + 1U) : 0;
+  instance.spawnTime = strip.now + delayMs;
+}
+
+void generateMovingInstanceLayout(SpriteState &state, const Segment &seg, uint16_t requestedCount,
+                                  uint16_t segmentWidth, uint16_t segmentHeight,
+                                  uint16_t spriteWidth, uint16_t spriteHeight,
+                                  uint32_t layoutKey) {
+  SpriteInstance *instances = getSpriteInstances(&state);
+  state.layoutKey = layoutKey;
+  state.instanceCount = requestedCount;
+  for (uint16_t index = 0; index < state.instanceCount; index++) {
+    scheduleMovingSpriteInstance(state, instances[index], seg, segmentWidth, segmentHeight,
+                                 spriteWidth, spriteHeight, state.instanceCount, true);
+  }
 }
 
 void generateInstanceLayout(SpriteState &state, uint16_t requestedCount, uint16_t segmentWidth, uint16_t segmentHeight, uint16_t spriteWidth, uint16_t spriteHeight, uint32_t layoutKey) {
@@ -247,14 +497,24 @@ void ensureInstanceLayout(SpriteState &state, const Segment &seg, uint16_t sprit
   const uint16_t segmentWidth = seg.vWidth();
   const uint16_t segmentHeight = seg.vHeight();
   const uint16_t desiredCount = getDesiredInstanceCount(seg, segmentWidth, segmentHeight, spriteWidth, spriteHeight);
+  const bool movingLifecycle = spriteUsesMovingLifecycle(seg, segmentWidth, spriteWidth);
   uint32_t layoutKey = hashString32(state.assetName);
   layoutKey ^= uint32_t(segmentWidth) << 20;
   layoutKey ^= uint32_t(segmentHeight) << 12;
   layoutKey ^= uint32_t(spriteWidth) << 6;
   layoutKey ^= uint32_t(spriteHeight);
   layoutKey ^= uint32_t(desiredCount) << 26;
+  if (movingLifecycle) {
+    layoutKey ^= 0xA5C3F17BUL;
+    layoutKey ^= uint32_t(seg.speed) << 1;
+    layoutKey ^= uint32_t(seg.custom1) << 9;
+  }
 
   if (state.layoutKey == layoutKey && state.instanceCount == desiredCount) return;
+  if (movingLifecycle) {
+    generateMovingInstanceLayout(state, seg, desiredCount, segmentWidth, segmentHeight, spriteWidth, spriteHeight, layoutKey);
+    return;
+  }
   generateInstanceLayout(state, desiredCount, segmentWidth, segmentHeight, spriteWidth, spriteHeight, layoutKey);
 }
 
@@ -273,6 +533,7 @@ bool allocateSpriteState(Segment &seg, const char *assetName, const SpriteFrameS
   state->cacheBytes = pixelBytes;
   state->lastRenderKey = UINT32_MAX;
   state->lastError = SPRITE_ERROR_NONE;
+  resetSpritePlaybackRuntime(*state, seg);
 
   SpriteFrame *frames = getSpriteFrames(state);
   uint32_t dataOffset = 0;
@@ -357,6 +618,105 @@ bool decodeSpriteCache(SpriteState &state, const SpriteFrameSpec *specs) {
   return success;
 }
 
+bool readSpriteFileExact(File &file, void *buffer, size_t bytes) {
+  return bytes == 0 || file.read(static_cast<uint8_t *>(buffer), bytes) == bytes;
+}
+
+byte loadPackedSprite(Segment &seg, const char *assetName, SpriteState *&state) {
+  const uint32_t start = millis();
+  File file = WLED_FS.open(assetName, "r");
+  if (!file) return SPRITE_ERROR_FILE_MISSING;
+
+  SpritePackedHeader header;
+  if (!readSpriteFileExact(file, &header, sizeof(header))) {
+    file.close();
+    return SPRITE_ERROR_BAD_PACKED;
+  }
+
+  if (memcmp(header.magic, SPRITE_PACKED_MAGIC, sizeof(header.magic)) != 0
+      || header.version != SPRITE_PACKED_VERSION
+      || header.frameCount == 0
+      || header.frameCount > SPRITE_MAX_FRAMES
+      || header.maxWidth == 0
+      || header.maxHeight == 0
+      || header.maxWidth > SPRITE_MAX_DIMENSION
+      || header.maxHeight > SPRITE_MAX_DIMENSION
+      || header.pixelBytes > SPRITE_CACHE_BUDGET) {
+    file.close();
+    return header.pixelBytes > SPRITE_CACHE_BUDGET ? SPRITE_ERROR_TOO_LARGE : SPRITE_ERROR_BAD_PACKED;
+  }
+
+  const size_t expectedSize = sizeof(SpritePackedHeader)
+    + size_t(header.frameCount) * sizeof(SpritePackedFrame)
+    + header.pixelBytes;
+  if (file.size() != expectedSize) {
+    file.close();
+    return SPRITE_ERROR_BAD_PACKED;
+  }
+
+  auto *specs = static_cast<SpriteFrameSpec *>(calloc(header.frameCount, sizeof(SpriteFrameSpec)));
+  if (!specs) {
+    file.close();
+    return SPRITE_ERROR_ALLOC;
+  }
+
+  uint32_t expectedOffset = 0;
+  uint16_t maxWidth = 0;
+  uint16_t maxHeight = 0;
+  byte errorCode = SPRITE_ERROR_NONE;
+  for (uint16_t frameIndex = 0; frameIndex < header.frameCount; frameIndex++) {
+    SpritePackedFrame packedFrame;
+    if (!readSpriteFileExact(file, &packedFrame, sizeof(packedFrame))) {
+      errorCode = SPRITE_ERROR_BAD_PACKED;
+      break;
+    }
+
+    const uint32_t frameBytes = uint32_t(packedFrame.width) * packedFrame.height * sizeof(SpritePixel);
+    if (packedFrame.width == 0
+        || packedFrame.height == 0
+        || packedFrame.width > SPRITE_MAX_DIMENSION
+        || packedFrame.height > SPRITE_MAX_DIMENSION
+        || packedFrame.dataOffset != expectedOffset
+        || expectedOffset > header.pixelBytes
+        || frameBytes > header.pixelBytes - expectedOffset) {
+      errorCode = SPRITE_ERROR_BAD_PACKED;
+      break;
+    }
+
+    specs[frameIndex].durationMs = header.frameCount > 1 ? max<uint16_t>(1, packedFrame.durationMs) : packedFrame.durationMs;
+    specs[frameIndex].width = packedFrame.width;
+    specs[frameIndex].height = packedFrame.height;
+    specs[frameIndex].flipX = false;
+    strlcpy(specs[frameIndex].filename, assetName, sizeof(specs[frameIndex].filename));
+    expectedOffset += frameBytes;
+    if (packedFrame.width > maxWidth) maxWidth = packedFrame.width;
+    if (packedFrame.height > maxHeight) maxHeight = packedFrame.height;
+  }
+
+  if (errorCode == SPRITE_ERROR_NONE && expectedOffset != header.pixelBytes) {
+    errorCode = SPRITE_ERROR_BAD_PACKED;
+  }
+
+  if (errorCode == SPRITE_ERROR_NONE && !allocateSpriteState(seg, assetName, specs, header.frameCount, header.pixelBytes, state)) {
+    errorCode = SPRITE_ERROR_ALLOC;
+  }
+
+  if (errorCode == SPRITE_ERROR_NONE && !readSpriteFileExact(file, getSpritePixelBlob(state), header.pixelBytes)) {
+    seg.deallocateData();
+    state = nullptr;
+    errorCode = SPRITE_ERROR_BAD_PACKED;
+  }
+
+  file.close();
+  free(specs);
+
+  if (errorCode != SPRITE_ERROR_NONE) return errorCode;
+
+  rememberSpriteStateInSharedCache(assetName, seg, state);
+  noteSpriteLoad(maxWidth, maxHeight, header.frameCount, header.pixelBytes, millis() - start);
+  return SPRITE_ERROR_NONE;
+}
+
 bool loadSpriteFromSpecs(Segment &seg, const char *assetName, SpriteFrameSpec *specs, uint16_t frameCount, SpriteState *&state, byte &errorCode) {
   const uint32_t start = millis();
   uint16_t maxWidth = 0;
@@ -379,6 +739,7 @@ bool loadSpriteFromSpecs(Segment &seg, const char *assetName, SpriteFrameSpec *s
     return false;
   }
 
+  rememberSpriteStateInSharedCache(assetName, seg, state);
   noteSpriteLoad(maxWidth, maxHeight, frameCount, pixelBytes, millis() - start);
   errorCode = SPRITE_ERROR_NONE;
   return true;
@@ -443,16 +804,30 @@ byte ensureSpriteState(Segment &seg, SpriteState *&state) {
   if (assetName[0] == '\0') return SPRITE_ERROR_NO_NAME;
 
   state = getSpriteState(seg);
-  if (state && strncmp(state->assetName, assetName, sizeof(state->assetName)) == 0) return SPRITE_ERROR_NONE;
+  if (state && strncmp(state->assetName, assetName, sizeof(state->assetName)) == 0) {
+    return state->lastError == SPRITE_ERROR_NONE ? SPRITE_ERROR_NONE : state->lastError;
+  }
+
+  state = cloneSpriteStateFromPeer(seg, assetName);
+  if (state) return SPRITE_ERROR_NONE;
+
+  state = cloneSpriteStateFromSharedCache(seg, assetName);
+  if (state) return SPRITE_ERROR_NONE;
+
+  seg.deallocateData();
+  state = nullptr;
 
   byte errorCode = SPRITE_ERROR_UNSUPPORTED;
-  if (endsWithIgnoreCase(assetName, ".png")) {
+  if (endsWithIgnoreCase(assetName, ".spr")) {
+    errorCode = loadPackedSprite(seg, assetName, state);
+  } else if (endsWithIgnoreCase(assetName, ".png")) {
     errorCode = loadSingleSprite(seg, assetName, state);
   } else if (endsWithIgnoreCase(assetName, ".json")) {
     errorCode = loadAnimDef(seg, assetName, state);
   }
 
   if (state) state->lastError = errorCode;
+  else if (errorCode != SPRITE_ERROR_NONE) storeSpriteFailureState(seg, assetName, errorCode);
   noteSpriteError(errorCode);
   return errorCode;
 }
@@ -587,11 +962,37 @@ int32_t spritePngSeek(PNGFILE *handle, int32_t position) {
 
 uint16_t computeMotionOffset(uint8_t speed, uint16_t segmentWidth, uint16_t spriteWidth) {
   if (speed == 0 || segmentWidth == 0 || spriteWidth > segmentWidth) return 0;
-  // sx=0 freezes, sx=1 should already feel like a *very* gentle drift — 1 px/sec
-  // gives ~32 seconds to cross a 32-wide panel, which is roughly right for
-  // ~2 m/s wind. Top end stays at 128 px/sec for storm-level wind.
-  const uint16_t pixelsPerSecond = map(speed, 1, 255, 1, 128);
-  return ((strip.now * pixelsPerSecond) / 1000U) % segmentWidth;
+  const uint16_t pixelsPerSecond = spritePixelsPerSecond(speed);
+  const uint16_t cycleWidth = segmentWidth + spriteWidth;
+  return ((strip.now * pixelsPerSecond) / 1000U) % max<uint16_t>(1, cycleWidth);
+}
+
+void updateMovingSpriteInstances(Segment &seg, SpriteState &state, uint16_t segmentWidth, uint16_t segmentHeight,
+                                 uint16_t spriteWidth, uint16_t spriteHeight) {
+  if (!spriteUsesMovingLifecycle(seg, segmentWidth, spriteWidth)) return;
+
+  const uint16_t pixelsPerSecond = spritePixelsPerSecond(seg.speed);
+  const uint32_t travelMs = computeSpriteTravelMs(seg.speed, segmentWidth, spriteWidth);
+  if (pixelsPerSecond == 0 || travelMs == 0) return;
+
+  SpriteInstance *instances = getSpriteInstances(&state);
+  for (uint16_t index = 0; index < state.instanceCount; index++) {
+    SpriteInstance &instance = instances[index];
+    const int32_t elapsedMs = int32_t(strip.now - instance.spawnTime);
+    if (elapsedMs < 0) {
+      instance.x = -int16_t(spriteWidth);
+      continue;
+    }
+
+    if (uint32_t(elapsedMs) >= travelMs) {
+      scheduleMovingSpriteInstance(state, instance, seg, segmentWidth, segmentHeight,
+                                   spriteWidth, spriteHeight, state.instanceCount, false);
+      continue;
+    }
+
+    const uint32_t traveledPixels = (uint32_t(elapsedMs) * pixelsPerSecond) / 1000U;
+    instance.x = int16_t(traveledPixels) - int16_t(spriteWidth);
+  }
 }
 
 byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame) {
@@ -609,7 +1010,10 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
   context.useMask = seg.check1;
   context.useGradient = seg.check1 && seg.check2;
   context.useHorizontalGradient = seg.check3;
-  context.moving = seg.speed > 0 && state.maxWidth <= seg.vWidth();
+  context.moving = spriteUsesMovingLifecycle(seg, context.segmentWidth, state.maxWidth);
+  if (context.moving) {
+    updateMovingSpriteInstances(seg, state, context.segmentWidth, context.segmentHeight, state.maxWidth, state.maxHeight);
+  }
   context.instances = getSpriteInstances(&state);
 
   const uint32_t renderKey = buildRenderKey(seg, state, motionOffset);
@@ -637,22 +1041,12 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
       for (uint16_t instanceIndex = 0; instanceIndex < context.instanceCount; instanceIndex++) {
         int16_t drawX = context.instances[instanceIndex].x;
         const int16_t drawY = context.instances[instanceIndex].y;
-        if (context.moving) {
-          int32_t movedX = drawX + context.motionOffset;
-          movedX %= int32_t(context.segmentWidth);
-          if (movedX < 0) movedX += context.segmentWidth;
-          drawX = movedX;
-        }
+        if (context.moving && (drawX >= int16_t(context.segmentWidth) || drawX + int16_t(context.spriteWidth) <= 0)) continue;
 
         const int16_t destX = drawX + x;
         const int16_t destY = drawY + y;
         blendSpritePixel(context, destX, destY, color, row[x].alpha);
         blitPixels++;
-
-        if (context.moving && context.spriteWidth <= context.segmentWidth && destX >= context.segmentWidth) {
-          blendSpritePixel(context, destX - context.segmentWidth, destY, color, row[x].alpha);
-          blitPixels++;
-        }
       }
     }
   }
@@ -666,7 +1060,7 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
 void resetSpriteRuntime(Segment &seg) {
   auto *state = getSpriteState(seg);
   if (!state) return;
-  state->lastRenderKey = UINT32_MAX;
+  resetSpritePlaybackRuntime(*state, seg);
 }
 
 byte renderUsermodSpriteToSegment(Segment &seg) {

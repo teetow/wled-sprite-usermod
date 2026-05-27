@@ -2,9 +2,14 @@
 
 
 constexpr uint32_t SPRITE_STATE_MAGIC = 0x53505254UL;
+constexpr char SPRITE_PACKED_MAGIC[4] = {'N', 'S', 'P', '1'};
+constexpr uint16_t SPRITE_PACKED_VERSION = 1;
 constexpr uint16_t SPRITE_MAX_DIMENSION = 320;
+constexpr uint16_t SPRITE_MAX_FRAMES = 64;
 constexpr uint16_t SPRITE_MAX_INSTANCES = 64;
 constexpr size_t SPRITE_CACHE_BUDGET = (MAX_SEGMENT_DATA > (12 * 1024)) ? (12 * 1024) : MAX_SEGMENT_DATA;
+constexpr uint8_t SPRITE_SHARED_CACHE_SLOTS = 4;
+constexpr size_t SPRITE_SHARED_CACHE_BUDGET = SPRITE_CACHE_BUDGET;
 constexpr uint32_t PRECIPITATION_STATE_MAGIC = 0x50524351UL;
 constexpr uint16_t PRECIPITATION_MAX_PARTICLES = 192;
 constexpr uint8_t PRECIPITATION_FP_SHIFT = 8;
@@ -30,6 +35,7 @@ constexpr byte SPRITE_ERROR_BAD_ANIMDEF = 4;
 constexpr byte SPRITE_ERROR_ALLOC = 5;
 constexpr byte SPRITE_ERROR_PNG = 6;
 constexpr byte SPRITE_ERROR_TOO_LARGE = 7;
+constexpr byte SPRITE_ERROR_BAD_PACKED = 8;
 
 struct SpriteFrameSpec {
   uint16_t durationMs;
@@ -52,8 +58,28 @@ struct SpritePixel {
   uint8_t alpha;
 } __attribute__((packed));
 
+struct SpritePackedHeader {
+  char magic[4];
+  uint16_t version;
+  uint16_t frameCount;
+  uint16_t maxWidth;
+  uint16_t maxHeight;
+  uint32_t pixelBytes;
+  uint32_t reserved;
+} __attribute__((packed));
+
+struct SpritePackedFrame {
+  uint16_t durationMs;
+  uint16_t width;
+  uint16_t height;
+  uint16_t flags;
+  uint32_t dataOffset;
+} __attribute__((packed));
+
 struct SpriteStats {
   uint32_t loads;
+  uint32_t cacheClones;
+  uint32_t sharedCacheHits;
   uint32_t loadErrors;
   uint32_t lastLoadMs;
   uint32_t peakCacheBytes;
@@ -71,6 +97,7 @@ struct SpriteStats {
 struct SpriteInstance {
   int16_t x;
   int16_t y;
+  uint32_t spawnTime;
 };
 
 struct SpriteState {
@@ -83,10 +110,18 @@ struct SpriteState {
   uint32_t cacheBytes;
   uint32_t layoutKey;
   uint32_t lastRenderKey;
+  uint32_t prngState;
   uint16_t maxWidth;
   uint16_t maxHeight;
   uint16_t instanceCount;
   uint8_t lastError;
+};
+
+struct SpriteSharedCacheEntry {
+  char assetName[WLED_MAX_SEGNAME_LEN + 2];
+  byte *data;
+  size_t dataSize;
+  uint32_t lastUsed;
 };
 
 struct SpriteRenderContext {
@@ -150,12 +185,14 @@ class SpritePrng {
 
 static File spritePngFile;
 static SpriteStats spriteStats = {};
+static SpriteSharedCacheEntry spriteSharedCache[SPRITE_SHARED_CACHE_SLOTS] = {};
+static uint32_t spriteSharedCacheClock = 0;
 static uint8_t spriteEffectId = 255;
 static uint8_t precipitationEffectId = 255;
 static uint8_t ditheredGradientEffectId = 255;
 static uint8_t starfieldEffectId = 255;
 
-static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Frame offset jitter,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=0";
+static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Spawn jitter,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=128";
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
 static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Density,,,,Gradient;;!;2;sx=128,ix=160";
