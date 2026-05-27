@@ -917,13 +917,39 @@ uint32_t getMaskColor(const SpriteRenderContext &context, int16_t destX, int16_t
   return context.segment->color_from_palette(paletteIndex, false, false, 0);
 }
 
-void blendSpritePixel(const SpriteRenderContext &context, int16_t destX, int16_t destY, uint32_t sourceColor, uint8_t alpha) {
+uint32_t alphaOverSpriteScratch(uint32_t dstColor, uint32_t srcColor, uint8_t srcAlpha) {
+  if (srcAlpha == 0) return dstColor;
+  const uint8_t dstAlpha = W(dstColor);
+  if (srcAlpha == 255 || dstAlpha == 0) {
+    return RGBW32(R(srcColor), G(srcColor), B(srcColor), srcAlpha);
+  }
+
+  const uint32_t invSrcAlpha = 255U - srcAlpha;
+  const uint32_t srcPremul = uint32_t(srcAlpha) * 255U;
+  const uint32_t dstPremul = uint32_t(dstAlpha) * invSrcAlpha;
+  const uint32_t outPremul = srcPremul + dstPremul;
+  if (outPremul == 0) return 0;
+
+  const uint8_t outAlpha = uint8_t(min<uint32_t>(255U, (outPremul + 127U) / 255U));
+  const uint8_t outRed = uint8_t((uint32_t(R(srcColor)) * srcPremul + uint32_t(R(dstColor)) * dstPremul + outPremul / 2U) / outPremul);
+  const uint8_t outGreen = uint8_t((uint32_t(G(srcColor)) * srcPremul + uint32_t(G(dstColor)) * dstPremul + outPremul / 2U) / outPremul);
+  const uint8_t outBlue = uint8_t((uint32_t(B(srcColor)) * srcPremul + uint32_t(B(dstColor)) * dstPremul + outPremul / 2U) / outPremul);
+  return RGBW32(outRed, outGreen, outBlue, outAlpha);
+}
+
+void blendSpritePixel(const SpriteRenderContext &context, int16_t destX, int16_t destY, uint32_t sourceColor, uint8_t alpha, bool overwriteAlphaOver = false) {
   if (alpha == 0) return;
   if ((unsigned)destX >= context.segmentWidth || (unsigned)destY >= context.segmentHeight) return;
 
   const uint32_t outputColor = context.useMask ? getMaskColor(context, destX, destY) : sourceColor;
   if (context.segment->blendMode == 17) {
-    context.segment->setPixelColorXY(destX, destY, RGBW32(R(outputColor), G(outputColor), B(outputColor), alpha));
+    const uint32_t src = RGBW32(R(outputColor), G(outputColor), B(outputColor), alpha);
+    if (overwriteAlphaOver || alpha == 255) {
+      context.segment->setPixelColorXY(destX, destY, src);
+      return;
+    }
+    const uint32_t dst = context.segment->getPixelColorXY(destX, destY);
+    context.segment->setPixelColorXY(destX, destY, alphaOverSpriteScratch(dst, src, alpha));
     return;
   }
 
@@ -1125,7 +1151,7 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
           uint8_t alpha = 0;
           sampleSpritePixelHorizontal(row, context, int16_t(destOffset) - 1, leftWeight, rightWeight, color, alpha);
           if (alpha == 0) continue;
-          blendSpritePixel(context, destX, destY, color, alpha);
+          blendSpritePixel(context, destX, destY, color, alpha, instanceIndex == 0);
           blitPixels++;
         }
       }
@@ -1141,7 +1167,7 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
           const int16_t drawY = context.instances[instanceIndex].y;
           const int16_t destX = drawX + x;
           const int16_t destY = drawY + y;
-          blendSpritePixel(context, destX, destY, color, row[x].alpha);
+          blendSpritePixel(context, destX, destY, color, row[x].alpha, instanceIndex == 0);
           blitPixels++;
         }
       }
