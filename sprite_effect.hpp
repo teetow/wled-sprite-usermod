@@ -210,6 +210,19 @@ uint32_t spriteStateRandom(SpriteState &state, uint32_t upperExclusive) {
   return spriteStateRandomValue(state) % upperExclusive;
 }
 
+int16_t floorSpriteFixed(int32_t value) {
+  if (value >= 0) return int16_t(value >> SPRITE_SUBPIXEL_SHIFT);
+  return -int16_t(((-value) + SPRITE_SUBPIXEL_SCALE - 1) >> SPRITE_SUBPIXEL_SHIFT);
+}
+
+int16_t spriteInstancePixelX(const SpriteInstance &instance) {
+  return floorSpriteFixed(instance.xFp);
+}
+
+int32_t spritePixelToFixed(int16_t value) {
+  return int32_t(value) * SPRITE_SUBPIXEL_SCALE;
+}
+
 size_t getSharedSpriteCacheBytes() {
   size_t bytes = 0;
   for (uint8_t index = 0; index < SPRITE_SHARED_CACHE_SLOTS; index++) {
@@ -405,7 +418,7 @@ void scheduleMovingSpriteInstance(SpriteState &state, SpriteInstance &instance, 
   const uint32_t travelMs = computeSpriteTravelMs(seg.speed, segmentWidth, spriteWidth);
   const uint32_t delayWindowMs = computeSpriteSpawnDelayWindowMs(seg, travelMs, instanceCount);
 
-  instance.x = -int16_t(spriteWidth);
+  instance.xFp = -int32_t(spriteWidth) * SPRITE_SUBPIXEL_SCALE;
   instance.y = int16_t(spriteStateRandom(state, uint32_t(maxY) + 1U));
 
   if (seedInFlight && travelMs > 0) {
@@ -441,7 +454,7 @@ void generateInstanceLayout(SpriteState &state, uint16_t requestedCount, uint16_
 
   state.layoutKey = layoutKey;
   state.instanceCount = 1;
-  instances[0] = { centeredX, centeredY };
+  instances[0] = { spritePixelToFixed(centeredX), centeredY, 0 };
 
   if (requestedCount <= 1 || spriteWidth >= segmentWidth || spriteHeight >= segmentHeight) return;
 
@@ -468,7 +481,7 @@ void generateInstanceLayout(SpriteState &state, uint16_t requestedCount, uint16_
     bool valid = true;
 
     for (uint16_t index = 0; index < state.instanceCount; index++) {
-      const int32_t dx = candidateCenterX - (instances[index].x + spriteHalfWidth);
+      const int32_t dx = candidateCenterX - (spriteInstancePixelX(instances[index]) + spriteHalfWidth);
       const int32_t dy = candidateCenterY - (instances[index].y + spriteHalfHeight);
       if (uint32_t(dx * dx + dy * dy) < minDistanceSq) {
         valid = false;
@@ -477,7 +490,7 @@ void generateInstanceLayout(SpriteState &state, uint16_t requestedCount, uint16_
     }
 
     if (valid) {
-      instances[state.instanceCount++] = { candidateX, candidateY };
+      instances[state.instanceCount++] = { spritePixelToFixed(candidateX), candidateY, 0 };
       continue;
     }
 
@@ -489,7 +502,9 @@ void generateInstanceLayout(SpriteState &state, uint16_t requestedCount, uint16_
   }
 
   while (state.instanceCount < requestedCount) {
-    instances[state.instanceCount++] = { int16_t(prng.random16(maxX + 1)), int16_t(prng.random16(maxY + 1)) };
+    const int16_t x = int16_t(prng.random16(maxX + 1));
+    const int16_t y = int16_t(prng.random16(maxY + 1));
+    instances[state.instanceCount++] = { spritePixelToFixed(x), y, 0 };
   }
 }
 
@@ -857,10 +872,11 @@ inline uint32_t rotl32(uint32_t value, uint8_t shift) {
   return (value << shift) | (value >> (32 - shift));
 }
 
-uint32_t buildRenderKey(const Segment &seg, const SpriteState &state, uint16_t motionOffset) {
+uint32_t buildRenderKey(const Segment &seg, const SpriteState &state, uint32_t motionOffset) {
   uint32_t key = state.layoutKey;
   key ^= uint32_t(state.currentFrame) << 24;
-  key ^= uint32_t(motionOffset) << 8;
+  key ^= motionOffset << 8;
+  key ^= motionOffset >> 11;
   key ^= uint32_t(seg.check1) << 2;
   key ^= uint32_t(seg.check2) << 3;
   key ^= uint32_t(seg.check3) << 4;
@@ -914,6 +930,62 @@ void blendSpritePixel(const SpriteRenderContext &context, int16_t destX, int16_t
   context.segment->blendPixelColorXY(destX, destY, outputColor, alpha);
 }
 
+void sampleSpritePixelHorizontal(const SpritePixel *row, const SpriteRenderContext &context,
+                                 int16_t sourceLeftX, uint16_t leftWeight, uint16_t rightWeight,
+                                 uint32_t &color, uint8_t &alpha) {
+  uint32_t weightedAlpha = 0;
+  uint32_t weightedRed = 0;
+  uint32_t weightedGreen = 0;
+  uint32_t weightedBlue = 0;
+
+  if (leftWeight > 0 && sourceLeftX >= 0 && sourceLeftX < int16_t(context.spriteWidth)) {
+    const SpritePixel &pixel = row[sourceLeftX];
+    if (pixel.alpha > 0) {
+      const uint32_t weight = uint32_t(leftWeight) * pixel.alpha;
+      weightedAlpha += weight;
+      if (!context.useMask) {
+        const uint32_t color32 = rgb565ToRgb32(pixel.color565);
+        weightedRed += uint32_t(R(color32)) * weight;
+        weightedGreen += uint32_t(G(color32)) * weight;
+        weightedBlue += uint32_t(B(color32)) * weight;
+      }
+    }
+  }
+
+  const int16_t sourceRightX = sourceLeftX + 1;
+  if (rightWeight > 0 && sourceRightX >= 0 && sourceRightX < int16_t(context.spriteWidth)) {
+    const SpritePixel &pixel = row[sourceRightX];
+    if (pixel.alpha > 0) {
+      const uint32_t weight = uint32_t(rightWeight) * pixel.alpha;
+      weightedAlpha += weight;
+      if (!context.useMask) {
+        const uint32_t color32 = rgb565ToRgb32(pixel.color565);
+        weightedRed += uint32_t(R(color32)) * weight;
+        weightedGreen += uint32_t(G(color32)) * weight;
+        weightedBlue += uint32_t(B(color32)) * weight;
+      }
+    }
+  }
+
+  if (weightedAlpha == 0) {
+    color = 0;
+    alpha = 0;
+    return;
+  }
+
+  alpha = uint8_t(min<uint32_t>(255U, (weightedAlpha + (SPRITE_SUBPIXEL_SCALE / 2)) >> SPRITE_SUBPIXEL_SHIFT));
+  if (context.useMask) {
+    color = SEGCOLOR(0);
+    return;
+  }
+
+  color = rgbToRgb32(
+    uint8_t((weightedRed + weightedAlpha / 2U) / weightedAlpha),
+    uint8_t((weightedGreen + weightedAlpha / 2U) / weightedAlpha),
+    uint8_t((weightedBlue + weightedAlpha / 2U) / weightedAlpha)
+  );
+}
+
 int spriteCacheWrite(PNGDRAW *pDraw) {
   auto *context = static_cast<SpriteCacheLoadContext *>(pDraw->pUser);
   if (!context) return 0;
@@ -960,11 +1032,11 @@ int32_t spritePngSeek(PNGFILE *handle, int32_t position) {
   return (pngFile && pngFile->seek(position)) ? 1 : 0;
 }
 
-uint16_t computeMotionOffset(uint8_t speed, uint16_t segmentWidth, uint16_t spriteWidth) {
+uint32_t computeMotionOffset(uint8_t speed, uint16_t segmentWidth, uint16_t spriteWidth) {
   if (speed == 0 || segmentWidth == 0 || spriteWidth > segmentWidth) return 0;
   const uint16_t pixelsPerSecond = spritePixelsPerSecond(speed);
-  const uint16_t cycleWidth = segmentWidth + spriteWidth;
-  return ((strip.now * pixelsPerSecond) / 1000U) % max<uint16_t>(1, cycleWidth);
+  const uint32_t cycleWidthFp = uint32_t(segmentWidth + spriteWidth) * SPRITE_SUBPIXEL_SCALE;
+  return ((strip.now * uint32_t(pixelsPerSecond) * SPRITE_SUBPIXEL_SCALE) / 1000U) % max<uint32_t>(1U, cycleWidthFp);
 }
 
 void updateMovingSpriteInstances(Segment &seg, SpriteState &state, uint16_t segmentWidth, uint16_t segmentHeight,
@@ -980,7 +1052,7 @@ void updateMovingSpriteInstances(Segment &seg, SpriteState &state, uint16_t segm
     SpriteInstance &instance = instances[index];
     const int32_t elapsedMs = int32_t(strip.now - instance.spawnTime);
     if (elapsedMs < 0) {
-      instance.x = -int16_t(spriteWidth);
+      instance.xFp = -int32_t(spriteWidth) * SPRITE_SUBPIXEL_SCALE;
       continue;
     }
 
@@ -990,14 +1062,14 @@ void updateMovingSpriteInstances(Segment &seg, SpriteState &state, uint16_t segm
       continue;
     }
 
-    const uint32_t traveledPixels = (uint32_t(elapsedMs) * pixelsPerSecond) / 1000U;
-    instance.x = int16_t(traveledPixels) - int16_t(spriteWidth);
+    const int32_t traveledFp = int32_t((uint32_t(elapsedMs) * pixelsPerSecond * SPRITE_SUBPIXEL_SCALE) / 1000U);
+    instance.xFp = traveledFp - int32_t(spriteWidth) * SPRITE_SUBPIXEL_SCALE;
   }
 }
 
 byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame) {
   ensureInstanceLayout(state, seg, state.maxWidth, state.maxHeight);
-  const uint16_t motionOffset = computeMotionOffset(seg.speed, seg.vWidth(), state.maxWidth);
+  const uint32_t motionOffset = computeMotionOffset(seg.speed, seg.vWidth(), state.maxWidth);
 
   SpriteRenderContext context;
   context.segment = &seg;
@@ -1033,20 +1105,45 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
   // newly-assigned tree sprite, where the tree's alpha=0 pixels skip writes).
   context.segment->fill(0);
   const auto *pixels = reinterpret_cast<const SpritePixel *>(getSpritePixelBlob(&state) + frame.dataOffset);
-  for (uint16_t y = 0; y < frame.height; y++) {
-    const SpritePixel *row = pixels + size_t(y) * frame.width;
-    for (uint16_t x = 0; x < frame.width; x++) {
-      if (row[x].alpha == 0) continue;
-      const uint32_t color = context.useMask ? SEGCOLOR(0) : rgb565ToRgb32(row[x].color565);
-      for (uint16_t instanceIndex = 0; instanceIndex < context.instanceCount; instanceIndex++) {
-        int16_t drawX = context.instances[instanceIndex].x;
-        const int16_t drawY = context.instances[instanceIndex].y;
-        if (context.moving && (drawX >= int16_t(context.segmentWidth) || drawX + int16_t(context.spriteWidth) <= 0)) continue;
 
-        const int16_t destX = drawX + x;
+  if (context.moving) {
+    for (uint16_t instanceIndex = 0; instanceIndex < context.instanceCount; instanceIndex++) {
+      const SpriteInstance &instance = context.instances[instanceIndex];
+      const int16_t drawX = spriteInstancePixelX(instance);
+      if (drawX >= int16_t(context.segmentWidth) || drawX + int16_t(context.spriteWidth) < 0) continue;
+
+      const uint16_t rightWeight = uint16_t(SPRITE_SUBPIXEL_SCALE - (uint32_t(instance.xFp) & (SPRITE_SUBPIXEL_SCALE - 1)));
+      const uint16_t leftWeight = SPRITE_SUBPIXEL_SCALE - rightWeight;
+      const int16_t drawY = instance.y;
+
+      for (uint16_t y = 0; y < frame.height; y++) {
+        const SpritePixel *row = pixels + size_t(y) * frame.width;
         const int16_t destY = drawY + y;
-        blendSpritePixel(context, destX, destY, color, row[x].alpha);
-        blitPixels++;
+        for (uint16_t destOffset = 0; destOffset <= context.spriteWidth; destOffset++) {
+          const int16_t destX = drawX + destOffset;
+          uint32_t color = 0;
+          uint8_t alpha = 0;
+          sampleSpritePixelHorizontal(row, context, int16_t(destOffset) - 1, leftWeight, rightWeight, color, alpha);
+          if (alpha == 0) continue;
+          blendSpritePixel(context, destX, destY, color, alpha);
+          blitPixels++;
+        }
+      }
+    }
+  } else {
+    for (uint16_t y = 0; y < frame.height; y++) {
+      const SpritePixel *row = pixels + size_t(y) * frame.width;
+      for (uint16_t x = 0; x < frame.width; x++) {
+        if (row[x].alpha == 0) continue;
+        const uint32_t color = context.useMask ? SEGCOLOR(0) : rgb565ToRgb32(row[x].color565);
+        for (uint16_t instanceIndex = 0; instanceIndex < context.instanceCount; instanceIndex++) {
+          const int16_t drawX = spriteInstancePixelX(context.instances[instanceIndex]);
+          const int16_t drawY = context.instances[instanceIndex].y;
+          const int16_t destX = drawX + x;
+          const int16_t destY = drawY + y;
+          blendSpritePixel(context, destX, destY, color, row[x].alpha);
+          blitPixels++;
+        }
       }
     }
   }

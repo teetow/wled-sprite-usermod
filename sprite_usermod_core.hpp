@@ -7,6 +7,8 @@ constexpr uint16_t SPRITE_PACKED_VERSION = 1;
 constexpr uint16_t SPRITE_MAX_DIMENSION = 320;
 constexpr uint16_t SPRITE_MAX_FRAMES = 64;
 constexpr uint16_t SPRITE_MAX_INSTANCES = 64;
+constexpr uint8_t SPRITE_SUBPIXEL_SHIFT = 8;
+constexpr int32_t SPRITE_SUBPIXEL_SCALE = 1 << SPRITE_SUBPIXEL_SHIFT;
 constexpr size_t SPRITE_CACHE_BUDGET = (MAX_SEGMENT_DATA > (12 * 1024)) ? (12 * 1024) : MAX_SEGMENT_DATA;
 constexpr uint8_t SPRITE_SHARED_CACHE_SLOTS = 4;
 constexpr size_t SPRITE_SHARED_CACHE_BUDGET = SPRITE_CACHE_BUDGET;
@@ -95,7 +97,7 @@ struct SpriteStats {
 };
 
 struct SpriteInstance {
-  int16_t x;
+  int32_t xFp;
   int16_t y;
   uint32_t spawnTime;
 };
@@ -130,7 +132,7 @@ struct SpriteRenderContext {
   uint16_t segmentHeight;
   uint16_t spriteWidth;
   uint16_t spriteHeight;
-  uint16_t motionOffset;
+  uint32_t motionOffset;
   uint16_t instanceCount;
   bool useMask;
   bool useGradient;
