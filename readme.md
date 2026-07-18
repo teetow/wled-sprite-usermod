@@ -195,35 +195,41 @@ Error codes:
 
 ## Local development
 
-The helper scripts create a temporary `platformio.sprite.ini`, link this repo
-into `custom_usermods` through `symlink://...`, and build the derived
-environment `esp32dev_sprite_usermod`.
+The helper scripts fetch the selected channel from the official
+`github.com/wled/WLED` remote, create a detached temporary worktree, apply the
+versioned alpha-over compatibility patch from `patches/`, and link this repo
+into `custom_usermods` through `symlink://...`. The original WLED worktree and
+its currently checked-out branch are not changed.
 
-They also validate that the target checkout is stock WLED (`github.com/wled/WLED`) to avoid compiling against older custom forks.
-
-Windows:
-
-```powershell
-.\build-local.ps1 D:\path\to\WLED esp32dev
-```
-
-Linux or macOS:
+`stable` is the highest non-prerelease WLED version tag and is the default.
+`nightly` is the official moving `nightly` tag. If the compatibility patch no
+longer applies cleanly, the build stops so upstream blending changes can be
+reviewed explicitly.
 
 ```sh
 ./build-local.sh /absolute/path/to/WLED esp32dev
+./build-local.sh /absolute/path/to/WLED esp32dev --channel nightly
 ```
+
+Successful builds are copied to
+`.build/<channel>/<pio-env>/firmware.bin`. The adjacent `build-info.json`
+records the exact WLED ref and commit, usermod commit and dirty state,
+compatibility-patch hash, PlatformIO environment, and build time.
 
 Build and deploy directly to a live WLED device:
 
-```powershell
-.\build-local.ps1 D:\path\to\WLED esp32dev -DeployHost wled-32.lan
+```sh
+./build-local.sh /absolute/path/to/WLED esp32dev --channel stable --deploy-host wled-32.local
 ```
 
 Deploy a previously built firmware image without rebuilding:
 
-```powershell
-.\build-local.ps1 D:\path\to\WLED esp32dev -DeployHost wled-32.lan -SkipBuild
+```sh
+./build-local.sh /absolute/path/to/WLED esp32dev --channel stable --deploy-host wled-32.local --skip-build
 ```
+
+When using `--skip-build`, select the same channel used to create the stored
+artifact.
 
 ## Notes
 

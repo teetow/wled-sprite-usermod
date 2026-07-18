@@ -4,47 +4,41 @@
 		{
 			"label": "FX: Build",
 			"type": "shell",
-			"command": "pwsh",
+			"command": "./build-local.sh",
 			"args": [
-				"-NoProfile",
-				"-ExecutionPolicy",
-				"Bypass",
-				"-File",
-				"${workspaceFolder}\\build-local.ps1",
-				"D:\\projects\\code\\!sandbox\\wled-sprite-build",
+				"${workspaceFolder}/../wled-sprite-build",
 				"esp32dev"
 			],
-			"isBackground": false,
-			"problemMatcher": []
+			"problemMatcher": [],
+			"detail": "Build firmware only, no deploy"
 		},
 		{
 			"label": "FX: Deploy",
 			"type": "shell",
-			"command": "pwsh",
+			"command": "./build-local.sh",
 			"args": [
-				"-NoProfile",
-				"-ExecutionPolicy",
-				"Bypass",
-				"-File",
-				"${workspaceFolder}\\build-local.ps1",
-				"D:\\projects\\code\\!sandbox\\wled-sprite-build",
+				"${workspaceFolder}/../wled-sprite-build",
 				"esp32dev",
-				"-DeployHost",
-				"wled-32.lan",
-				"-SkipBuild"
+				"--skip-build",
+				"--deploy-host",
+				"wled-32.local"
 			],
-			"isBackground": false,
-			"problemMatcher": []
+			"problemMatcher": [],
+			"detail": "Deploy the most recently built firmware without rebuilding"
 		},
 		{
 			"label": "FX: Build and Deploy",
-			"dependsOrder": "sequence",
-			"dependsOn": [
-				"Build",
-				"Deploy"
+			"type": "shell",
+			"command": "./build-local.sh",
+			"args": [
+				"${workspaceFolder}/../wled-sprite-build",
+				"esp32dev",
+				"--deploy-host",
+				"wled-32.local"
 			],
+			"group": "build",
 			"problemMatcher": [],
-			"group": "build"
+			"detail": "Build firmware and deploy it to wled-32.local"
 		}
 	]
 }
