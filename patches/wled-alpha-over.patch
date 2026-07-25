@@ -1,5 +1,5 @@
 diff --git a/wled00/FX.h b/wled00/FX.h
-index a8f6e1cd..8fcc3ada 100644
+index a8f6e1cd..0e46c699 100644
 --- a/wled00/FX.h
 +++ b/wled00/FX.h
 @@ -456,7 +456,7 @@ class Segment {
@@ -7,12 +7,12 @@ index a8f6e1cd..8fcc3ada 100644
        bool    check3  : 1;        // checkmark 3
      };
 -    uint8_t   blendMode;          // segment blending modes: top, bottom, add, subtract, difference, average, multiply, divide, lighten, darken, screen, overlay, hardlight, softlight, dodge, burn, stencil
-+    uint8_t   blendMode;          // segment blending modes: top, bottom, add, subtract, difference, average, multiply, divide, lighten, darken, screen, overlay, hardlight, softlight, dodge, burn, stencil, alpha-over
++    uint8_t   blendMode;          // segment blending modes: top, bottom, add, subtract, difference, average, multiply, divide, lighten, darken, screen, overlay, hardlight, softlight, dodge, burn, stencil, alpha-over, holdout
      char     *name;               // segment name
  
      // runtime data
 diff --git a/wled00/FX_fcn.cpp b/wled00/FX_fcn.cpp
-index 31c23f84..acdd0d37 100644
+index 31c23f84..2e6541c7 100644
 --- a/wled00/FX_fcn.cpp
 +++ b/wled00/FX_fcn.cpp
 @@ -1413,7 +1413,7 @@ static uint8_t _burn      (uint8_t a, uint8_t b) { return ~_divide(a,~b); }
@@ -20,38 +20,51 @@ index 31c23f84..acdd0d37 100644
  static uint8_t _dummy     (uint8_t a, uint8_t b) { return a; } // dummy (same as _top) to fill the function list and make it safe from OOB access
  
 -#define BLENDMODES  17 // number of blend modes must match "bm" in index.js, all cases must be handled in segblend() @ blendSegment()
-+#define BLENDMODES  18 // number of blend modes must match "bm" in index.js, all cases must be handled in segblend() @ blendSegment()
++#define BLENDMODES  19 // number of blend modes must match "bm" in index.js, all cases must be handled in segblend() @ blendSegment()
  
  void WS2812FX::blendSegment(const Segment &topSegment) const {
    typedef uint8_t(*FuncType)(uint8_t, uint8_t);
-@@ -1435,6 +1435,18 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+@@ -1423,5 +1423,5 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+     _difference, _average,   _dummy,    _divide,
+     _lighten,    _darken,    _screen,   _overlay,
+     _hardlight,  _softlight, _dodge,    _burn,
+-    _dummy
++    _dummy,      _dummy,     _dummy
+   };
+@@ -1435,6 +1435,23 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
        case 2 : return color_add(t,b,true); // add with preserve color ratio to avoid color clipping
        case 6 : return RGBW32(_multiply(R(t),R(b)), _multiply(G(t),G(b)), _multiply(B(t),B(b)), _multiply(W(t),W(b))); // multiply (7% faster than lambda at 100bytes flash cost)
        case 16: return t ? t : b;           // stencil (use top layer if not black, else bottom)
++      // AI: W carries temporary alpha/matte data while composing RGB panels.
++      case 18: return RGBW32(R(b), G(b), B(b), max(W(t), W(b))); // holdout: preserve RGB and carry matte coverage in W to the next alpha-over layer
 +      case 17: {                            // alpha-over, using top W as alpha on RGB panels
++        const uint32_t background = RGBW32(R(b), G(b), B(b), 0); // W is scratch alpha/matte on RGB panels
++        if (W(b)) return background;        // consume pending holdout with a hard cutout
 +        const uint8_t alpha = W(t);
-+        if (alpha == 0) return b;
-+        if (alpha == 255) return RGBW32(R(t), G(t), B(t), W(b));
++        if (alpha == 0) return background;
++        if (alpha == 255) return RGBW32(R(t), G(t), B(t), 0);
 +        const uint8_t invAlpha = 255 - alpha;
 +        return RGBW32(
 +          (R(t) * alpha + R(b) * invAlpha) / 255,
 +          (G(t) * alpha + G(b) * invAlpha) / 255,
 +          (B(t) * alpha + B(b) * invAlpha) / 255,
-+          W(b)
++          0
 +        );
 +      }
++      // AI: end
      }
      // default: use function pointer from array
      const auto func = funcs[blendMode];
 diff --git a/wled00/data/index.js b/wled00/data/index.js
-index da73a0e5..e1f484e9 100644
+index da73a0e5..1bad8668 100644
 --- a/wled00/data/index.js
 +++ b/wled00/data/index.js
-@@ -817,6 +817,7 @@ function populateSegments(s)
+@@ -817,6 +817,8 @@ function populateSegments(s)
  							`<option value="14" ${inst.bm==14?' selected':''}>Dodge</option>`+
  							`<option value="15" ${inst.bm==15?' selected':''}>Burn</option>`+
  							`<option value="16" ${inst.bm==16?' selected':''}>Stencil</option>`+
 +							`<option value="17" ${inst.bm==17?' selected':''}>Alpha Over</option>`+
++							`<option value="18" ${inst.bm==18?' selected':''}>Holdout</option>`+
  						`</select></div>`+
  					`</div>`;
  		let sndSim = `<div data-snd="si" class="lbl-s hide">Sound sim<br>`+

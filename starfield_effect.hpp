@@ -47,7 +47,9 @@ void renderStarfieldToSegment(Segment &seg) {
   // Density: ix maps to 1..(pixels/16), matching the raster reference's ~6% coverage
   // at full slider. At default ix=160 a 32x10 segment renders ~13 stars.
   const uint32_t pixels = uint32_t(width) * height;
-  const uint16_t maxStars = max<uint16_t>(1, uint16_t(pixels / 16U));
+  // Cap raised from pixels/16 to pixels/4 so high `ix` can drive a dense field
+  // (needed to make the moon-holdout cutout obvious). Production tunes via `ix`.
+  const uint16_t maxStars = max<uint16_t>(1, uint16_t(pixels / 4U));
   const uint16_t starCount = uint16_t(1U + map(seg.intensity, 1, 255, 0, max<uint16_t>(0, maxStars - 1U)));
 
   // Twinkle rate: sx=128 reproduces the legacy raster's 1.6 rad/s pulse, which

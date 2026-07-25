@@ -970,7 +970,9 @@ void blendSpritePixel(const SpriteRenderContext &context, int16_t destX, int16_t
   if ((unsigned)destX >= context.segmentWidth || (unsigned)destY >= context.segmentHeight) return;
 
   const uint32_t outputColor = context.useMask ? getMaskColor(context, destX, destY) : sourceColor;
-  if (context.segment->blendMode == 17) {
+  // 17 = alpha-over, 18 = holdout. Both need coverage stored in W: alpha-over composites it to
+  // the output, holdout hands it to the next segment as a matte (the segment itself never shows).
+  if (context.segment->blendMode == 17 || context.segment->blendMode == 18) {
     const uint32_t src = RGBW32(R(outputColor), G(outputColor), B(outputColor), alpha);
     if (overwriteAlphaOver || alpha == 255) {
       context.segment->setPixelColorXY(destX, destY, src);
