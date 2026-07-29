@@ -127,16 +127,20 @@ that actually fades toward a color, pick any non-black value.
 ## Starfield controls
 
 `Starfield` paints procedural twinkling stars over the segment, recreating the
-twinkle animation from the Blaster rasterizer. Star positions are deterministic
-per segment, so the same panel always lights the same stars; each star pulses
-on its own phase via `sin(t * rate + seed * 9) * 0.5 + 0.5`, then maps to
-`0.18..1.0` alpha so even the dimmest twinkle stays faintly visible.
+twinkle animation from the Blaster rasterizer. The segment is divided into a
+stable grid of roughly square cells and one star is placed at a deterministic
+random position in each selected cell. Each star also receives a deterministic
+magnitude: high-magnitude stars are brighter and appear earlier as `Night depth`
+rises, while the many low-magnitude stars fade in later and remain naturally
+dimmer. The magnitude distribution is stable, so changing intensity never moves
+stars that are already visible. Twinkle modulates each star's magnitude-derived
+alpha rather than making every star equally bright.
 
 | WLED control | Label in UI       | Description                                                                                                  |
 | ------------ | ----------------- | ------------------------------------------------------------------------------------------------------------ |
 | Color 1      | (primary star)    | Star color. The starfield paints every twinkle in this color (or palette if `Gradient` is enabled).          |
 | Speed        | `Twinkle speed`   | Twinkle pulse rate. `128` reproduces the rasterizer's 1.6 rad/s feel; lower slows the pulse, higher speeds it up. |
-| Intensity    | `Density`         | Number of visible stars. `0` blanks the segment; full slider caps at roughly `pixels / 16` stars (~6% coverage). |
+| Intensity    | `Night depth`     | Reveals stars in magnitude order. `0` blanks the segment; `255` reveals the full catalogue of roughly `pixels / 4` stars (~25% coverage). |
 | Check 1      | `Gradient`        | Overrides the twinkles with a static vertical palette gradient — useful if you want to repurpose the seg as a sky backdrop. |
 
 ## DitheredGradient controls

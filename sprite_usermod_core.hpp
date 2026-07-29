@@ -29,6 +29,10 @@ constexpr float DITHERED_GRADIENT_TWO_PI = 6.28318530718f;
 constexpr float STARFIELD_DEFAULT_RATE = 1.6f;
 constexpr float STARFIELD_MIN_FADE = 0.18f;
 constexpr float STARFIELD_FADE_SPAN = 0.82f;
+constexpr float STARFIELD_REVEAL_WIDTH = 0.03f;
+constexpr float STARFIELD_MIN_MAGNITUDE_ALPHA = 0.22f;
+constexpr float STARFIELD_MAGNITUDE_ALPHA_SPAN = 0.78f;
+constexpr float STARFIELD_MAGNITUDE_GAMMA = 2.2f;
 constexpr byte SPRITE_ERROR_NONE = 0;
 constexpr byte SPRITE_ERROR_NO_NAME = 1;
 constexpr byte SPRITE_ERROR_UNSUPPORTED = 2;
@@ -200,7 +204,7 @@ static uint8_t starfieldEffectId = 255;
 static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Spawn jitter,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=128";
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
-static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Density,,,,Gradient;;!;2;sx=128,ix=160";
+static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Night depth,,,,Gradient;;!;2;sx=128,ix=160";
 
 void modeSpriteUsermod();
 void modePrecipitationUsermod();
@@ -251,4 +255,3 @@ inline const uint8_t *getSpritePixelBlob(const SpriteState *state) {
 inline PrecipitationParticle *getPrecipitationParticles(PrecipitationState *state) {
   return reinterpret_cast<PrecipitationParticle *>(state + 1);
 }
-
