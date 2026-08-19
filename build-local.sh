@@ -90,6 +90,7 @@ USERMOD_NAME=wled-sprite-usermod
 ALT_CONF=platformio.sprite.ini
 ALT_ENV=${PIO_ENV}_sprite_usermod
 PATCH_FILE="$USERMOD_DIR/patches/wled-alpha-over.patch"
+HOLDOUT_PATCH_FILE="$USERMOD_DIR/patches/wled-holdout-one-shot.patch"
 OUTPUT_DIR="$USERMOD_DIR/.build/$CHANNEL/$PIO_ENV"
 FIRMWARE_OUTPUT="$OUTPUT_DIR/firmware.bin"
 USERMOD_PATH=$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$USERMOD_DIR")
@@ -102,6 +103,10 @@ fi
 
 if [[ ! -f "$PATCH_FILE" ]]; then
   echo "WLED compatibility patch not found at: $PATCH_FILE" >&2
+  exit 1
+fi
+if [[ ! -f "$HOLDOUT_PATCH_FILE" ]]; then
+  echo "WLED holdout patch not found at: $HOLDOUT_PATCH_FILE" >&2
   exit 1
 fi
 
@@ -260,6 +265,11 @@ if [[ $SKIP_BUILD == false ]]; then
     exit 1
   fi
   git -C "$BUILD_WLED_DIR" apply "$PATCH_FILE"
+  if ! git -C "$BUILD_WLED_DIR" apply --check "$HOLDOUT_PATCH_FILE"; then
+    echo "The holdout patch does not apply cleanly after the compatibility patch." >&2
+    exit 1
+  fi
+  git -C "$BUILD_WLED_DIR" apply "$HOLDOUT_PATCH_FILE"
 
   PLATFORMIO_INI="$BUILD_WLED_DIR/platformio.ini"
   ALT_CONF_PATH="$BUILD_WLED_DIR/$ALT_CONF"
@@ -299,6 +309,7 @@ if [[ $SKIP_BUILD == false ]]; then
     USERMOD_DIRTY=false
   fi
   PATCH_SHA=$(git hash-object "$PATCH_FILE")
+  HOLDOUT_PATCH_SHA=$(git hash-object "$HOLDOUT_PATCH_FILE")
   BUILT_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
   {
@@ -309,6 +320,7 @@ if [[ $SKIP_BUILD == false ]]; then
     printf '  "usermod_sha": "%s",\n' "$USERMOD_SHA"
     printf '  "usermod_dirty": %s,\n' "$USERMOD_DIRTY"
     printf '  "patch_sha": "%s",\n' "$PATCH_SHA"
+    printf '  "holdout_patch_sha": "%s",\n' "$HOLDOUT_PATCH_SHA"
     printf '  "pio_environment": "%s",\n' "$PIO_ENV"
     printf '  "built_at": "%s"\n' "$BUILT_AT"
     printf '}\n'

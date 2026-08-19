@@ -1,0 +1,38 @@
+diff --git a/wled00/FX_fcn.cpp b/wled00/FX_fcn.cpp
+index 2e6541c7..6cc8260f 100644
+--- a/wled00/FX_fcn.cpp
++++ b/wled00/FX_fcn.cpp
+@@ -1463,2 +1463,9 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+   const int     height     = topSegment.height();
++  // AI: Holdout is a one-layer operation. Its scratch marker must be consumed
++  // completely by the next alpha-over segment, independent of that segment's
++  // opacity, so it cannot leak into later layers.
++  const auto applyBlend = [&](uint32_t top, uint32_t bottom, uint8_t opacity) {
++    const uint32_t blended = segblend(top, bottom);
++    return blendMode == 17 && W(bottom) ? blended : color_blend(bottom, blended, opacity);
++  };
+   //const uint32_t bgColor   = topSegment.colors[1]; // background color (unused, could add it to stencil mode if requested)
+@@ -1544,3 +1551,3 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+       size_t indx = XY(baseX, baseY); // absolute address on strip
+-      _pixels[indx] = color_blend(_pixels[indx], segblend(c, _pixels[indx]), o);
++      _pixels[indx] = applyBlend(c, _pixels[indx], o);
+       if (_pixelCCT) _pixelCCT[indx] = cct;
+@@ -1553,5 +1560,5 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+         const size_t idxMM = XY(mirrorX, mirrorY);
+-        if (topSegment.mirror)                        _pixels[idxMX] = color_blend(_pixels[idxMX], segblend(c, _pixels[idxMX]), o);
+-        if (topSegment.mirror_y)                      _pixels[idxMY] = color_blend(_pixels[idxMY], segblend(c, _pixels[idxMY]), o);
+-        if (topSegment.mirror && topSegment.mirror_y) _pixels[idxMM] = color_blend(_pixels[idxMM], segblend(c, _pixels[idxMM]), o);
++        if (topSegment.mirror)                        _pixels[idxMX] = applyBlend(c, _pixels[idxMX], o);
++        if (topSegment.mirror_y)                      _pixels[idxMY] = applyBlend(c, _pixels[idxMY], o);
++        if (topSegment.mirror && topSegment.mirror_y) _pixels[idxMM] = applyBlend(c, _pixels[idxMM], o);
+         if (_pixelCCT) {
+@@ -1643,3 +1650,3 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+         if (indxM >= topSegment.stop) indxM -= length; // wrap
+-        _pixels[indxM] = color_blend(_pixels[indxM], segblend(c, _pixels[indxM]), o);
++        _pixels[indxM] = applyBlend(c, _pixels[indxM], o);
+         if (_pixelCCT) _pixelCCT[indxM] = cct;
+@@ -1648,3 +1655,3 @@ void WS2812FX::blendSegment(const Segment &topSegment) const {
+       if (indx >= topSegment.stop) indx -= length; // wrap
+-      _pixels[indx] = color_blend(_pixels[indx], segblend(c, _pixels[indx]), o);
++      _pixels[indx] = applyBlend(c, _pixels[indx], o);
+       if (_pixelCCT) _pixelCCT[indx] = cct;
