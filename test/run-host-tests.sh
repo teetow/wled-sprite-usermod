@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Build and run the host-side effect harnesses. No PlatformIO, no hardware:
+# plain g++ against test/wled_stub.hpp.
+set -euo pipefail
+
+TEST_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+OUT_DIR=${TMPDIR:-/tmp}/wled-sprite-usermod-tests
+mkdir -p "$OUT_DIR"
+
+g++ -std=c++17 -O1 -Wall -Wno-unused-function \
+  -o "$OUT_DIR/wind_harness" "$TEST_DIR/wind_harness.cpp"
+
+"$OUT_DIR/wind_harness" "$@"

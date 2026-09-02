@@ -2,6 +2,23 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "FX: Host tests",
+			"type": "shell",
+			"command": "./test/run-host-tests.sh",
+			"problemMatcher": [],
+			"detail": "Run the deterministic host harnesses (no hardware, no PlatformIO)"
+		},
+		{
+			"label": "FX: Host tests (show frames)",
+			"type": "shell",
+			"command": "./test/run-host-tests.sh",
+			"args": [
+				"--frames"
+			],
+			"problemMatcher": [],
+			"detail": "Host harnesses plus ASCII frame dumps for eyeballing effect looks"
+		},
+		{
 			"label": "FX: Build",
 			"type": "shell",
 			"command": "./build-local.sh",

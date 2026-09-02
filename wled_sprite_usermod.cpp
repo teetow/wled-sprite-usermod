@@ -13,6 +13,7 @@ namespace sprite_usermod {
 #include "precipitation_effect.hpp"
 #include "dithered_gradient_effect.hpp"
 #include "starfield_effect.hpp"
+#include "wind_effect.hpp"
 
 void addSpriteInfo(JsonObject &root) {
   JsonObject spriteInfo = root.createNestedObject(F("sprite_usermod"));
@@ -21,6 +22,7 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("precip_fxid")] = precipitationEffectId;
   spriteInfo[F("dithered_gradient_fxid")] = ditheredGradientEffectId;
   spriteInfo[F("starfield_fxid")] = starfieldEffectId;
+  spriteInfo[F("wind_fxid")] = windEffectId;
   spriteInfo[F("mode")] = F("cache");
   spriteInfo[F("cache_generation")] = spriteCacheGeneration;
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
@@ -63,6 +65,7 @@ void registerEffect() {
   if (precipitationEffectId == 255) precipitationEffectId = strip.addEffect(255, &modePrecipitationUsermod, _data_FX_MODE_PRECIPITATION);
   if (ditheredGradientEffectId == 255) ditheredGradientEffectId = strip.addEffect(255, &modeDitheredGradientUsermod, _data_FX_MODE_DITHERED_GRADIENT);
   if (starfieldEffectId == 255) starfieldEffectId = strip.addEffect(255, &modeStarfieldUsermod, _data_FX_MODE_STARFIELD);
+  if (windEffectId == 255) windEffectId = strip.addEffect(255, &modeWindUsermod, _data_FX_MODE_WIND);
 }
 
 void modeSpriteUsermod() {
@@ -96,6 +99,14 @@ void modeStarfieldUsermod() {
     return;
   }
   renderStarfieldToSegment(SEGMENT);
+}
+
+void modeWindUsermod() {
+  if (!strip.isMatrix || !SEGMENT.is2D()) {
+    SEGMENT.fill(SEGCOLOR(0));
+    return;
+  }
+  renderWindToSegment(SEGMENT);
 }
 
 } // namespace sprite_usermod

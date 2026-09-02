@@ -1,12 +1,16 @@
 # wled-sprite-usermod
 
-`Sprite` is a standalone WLED usermod that adds two 2D effects:
+`Sprite` is a standalone WLED usermod that adds several 2D effects:
 
 - `Sprite` renders a PNG sprite or a JSON-defined animation on a 2D segment.
   The asset is selected from the segment name, decoded once, then cached for
   playback.
 - `Precipitation` renders procedural falling particles for rain, snow, sleet,
   hail, sparks, or any other color-driven shower.
+- `Wind` renders procedural particles blowing across the segment: leaves,
+  grit, spindrift, embers. It is the horizontal sibling of `Precipitation`,
+  with flutter instead of splashes and three particle colors instead of a
+  head/trail gradient.
 
 ## Supported targets
 
@@ -124,6 +128,36 @@ Setting `Trail end` to solid black makes the trail fade to fully transparent
 (alpha is what fades — the tail does not darken the background). For a tail
 that actually fades toward a color, pick any non-black value.
 
+## Wind controls
+
+`Wind` blows particles across the segment instead of dropping them down it.
+Each particle picks one of the three segment colors from its own seed, so a
+palette of three tints produces a mixed field — which is what makes the same
+effect read as autumn leaves, summer grit, or winter spindrift. Particles that
+leave the segment on either axis re-enter at the upwind edge.
+
+| WLED control | Label in UI      | Description                                                                                                          |
+| ------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Color 1..3   | `Particle A/B/C` | The three particle colors. Each particle owns one of them. Leave B and C black for a uniform field.                   |
+| Speed        | `Gust speed`     | Horizontal travel speed, roughly 3 px/s at `1` and 60 px/s at `255`. `0` freezes the field.                           |
+| Intensity    | `Density`        | Active particle count. `0` disables particles.                                                                       |
+| Custom 1     | `Flutter`        | Vertical sine wobble. `128` is roughly ±1 px, `255` roughly ±2 px. `0` makes particles slide flat.                    |
+| Custom 2     | `Vertical drift` | `128` is level flight; above it particles settle as they cross, below it they lift. ±16 px/s at the extremes.         |
+| Custom 3     | `Streak length`  | Trailing pixels behind each particle, drawn straight upwind. `0` (bare particles) suits leaves; 2-3 suits spindrift.  |
+| Check 1      | `Blow left`      | Reverses travel. Off blows right.                                                                                    |
+
+Suggested starting points:
+
+| Look        | Particle colors        | Gust speed | Density | Flutter | Vertical drift | Streak |
+| ----------- | ---------------------- | ---------- | ------- | ------- | -------------- | ------ |
+| Autumn leaves | Yellow / red / brown | Medium     | Low-medium | High | Slightly settling | 0   |
+| Summer grit | Three dark neutrals    | Medium     | Low     | Low     | Slightly settling | 0    |
+| Spindrift   | Three near-whites      | High       | Medium  | Medium  | Level          | 2-3    |
+| Embers      | Orange / red / yellow  | Low        | Low     | Medium  | Lifting        | 1      |
+
+Particles carry the same parallax as `Precipitation`: each one's seed doubles
+as a depth value, so background particles travel slower and render dimmer.
+
 ## Starfield controls
 
 `Starfield` paints procedural twinkling stars over the segment, recreating the
@@ -173,6 +207,7 @@ Useful fields include:
 - `precip_fxid`: runtime effect id assigned to `Precipitation`
 - `dithered_gradient_fxid`: runtime effect id assigned to `DitheredGradient`
 - `starfield_fxid`: runtime effect id assigned to `Starfield`
+- `wind_fxid`: runtime effect id assigned to `Wind`
 - `active`: number of active segments using the effect
 - `bytes`: current sprite cache memory in use
 - `peak`: highest cache usage seen since boot
@@ -196,6 +231,29 @@ Error codes:
 | 6    | PNG open or decode failure                       |
 | 7    | Asset exceeds sprite cache budget or size limits |
 | 8    | Invalid packed `.spr` asset                      |
+
+## Host tests
+
+Particle effects are stepped on a host before they go near a panel:
+
+```sh
+./test/run-host-tests.sh            # build and run
+./test/run-host-tests.sh --frames   # plus ASCII frame dumps
+```
+
+`test/wled_stub.hpp` supplies the slice of WLED the effects touch — Segment,
+`strip.now`, the color macros and the real `sin8_t` — so `test/wind_harness.cpp`
+compiles the shipped `wind_effect.hpp` unchanged and steps it frame by frame with
+a clock the test owns. Because the effects seed their PRNG from `strip.now`, a
+pinned start time replays the identical field every run: no wall clock, no
+hardware, no flaky particle test.
+
+This is where physics belongs. It has already earned itself: it caught a spawn
+margin that reached further outside the segment than the despawn margin, so a
+recycled particle was re-rolled every frame — visible on a panel only as a faint
+flicker at the entry edge, and invisible in a still capture.
+
+Requires only `g++`; there is no PlatformIO or toolchain dependency.
 
 ## Local development
 
@@ -238,6 +296,6 @@ artifact.
 ## Notes
 
 - Effect name in WLED: `Sprite`
-- Additional effect names in WLED: `Precipitation`, `DitheredGradient`, `Starfield`
+- Additional effect names in WLED: `Precipitation`, `DitheredGradient`, `Starfield`, `Wind`
 - The current implementation is ESP32-only.
 - This repository intentionally does not include demo sprite assets.
