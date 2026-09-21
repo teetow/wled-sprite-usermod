@@ -15,6 +15,67 @@ namespace sprite_usermod {
 #include "starfield_effect.hpp"
 #include "wind_effect.hpp"
 
+// Optional per-segment gust ceiling in the same 0..255 scale as sx. Zero
+// falls back to sx. Stored outside effect data so resizing preserves controls.
+struct WindControls {
+  uint8_t gust = 0;
+  int16_t spawnRateTenths = -1; // negative preserves the standalone density mode
+};
+static WindControls windControls[MAX_NUM_SEGMENTS];
+
+void readWindSegment(JsonObject elem, int id) {
+  if (id < 0 || id >= strip.getSegmentsNum() || id >= MAX_NUM_SEGMENTS) return;
+  if (strip.getSegment(id).mode != windEffectId) {
+    windControls[id] = WindControls{};
+    return;
+  }
+  if (elem.containsKey("wind_gust")) {
+    const int value = elem["wind_gust"] | 0;
+    windControls[id].gust = uint8_t(max(0, min(255, value)));
+  } else if (elem.containsKey("fx")) {
+    // A full effect selection/preset without this extension means steady wind.
+    windControls[id].gust = 0;
+  }
+  if (elem.containsKey("wind_spawn_rate")) {
+    const float rate = elem["wind_spawn_rate"] | -1.0f;
+    windControls[id].spawnRateTenths = !isfinite(rate) || rate < 0 ? -1 : int16_t(roundf(min(3.0f, rate) * 10.0f));
+  } else if (elem.containsKey("fx")) {
+    windControls[id].spawnRateTenths = -1;
+  }
+}
+
+void readWindState(JsonObject &root) {
+  if (root[F("rSeg")] | false) for (auto &controls : windControls) controls = WindControls{};
+  JsonVariant segments = root["seg"];
+  if (segments.is<JsonArray>()) {
+    int index = 0;
+    for (JsonObject elem : segments.as<JsonArray>()) {
+      readWindSegment(elem, elem["id"] | index);
+      index++;
+    }
+  } else if (segments.is<JsonObject>()) {
+    JsonObject elem = segments.as<JsonObject>();
+    const int id = elem["id"] | -1;
+    if (id >= 0) readWindSegment(elem, id);
+    else for (unsigned i = 0; i < strip.getSegmentsNum(); i++) {
+      const Segment &seg = strip.getSegment(i);
+      if (seg.isActive() && seg.isSelected()) readWindSegment(elem, i);
+    }
+  }
+}
+
+// WLED invokes this hook before serializing seg[], so report the extra control
+// separately, indexed by segment id. Neoblaster folds it into the live segments.
+void addWindState(JsonObject &root) {
+  JsonArray gusts = root.createNestedArray("wind_gust");
+  JsonArray rates = root.createNestedArray("wind_spawn_rate");
+  for (unsigned id = 0; id < strip.getSegmentsNum(); id++) {
+    gusts.add(strip.getSegment(id).mode == windEffectId ? windControls[id].gust : 0);
+    const int16_t rate = windControls[id].spawnRateTenths;
+    rates.add(strip.getSegment(id).mode == windEffectId && rate >= 0 ? rate / 10.0f : -1.0f);
+  }
+}
+
 void addSpriteInfo(JsonObject &root) {
   JsonObject spriteInfo = root.createNestedObject(F("sprite_usermod"));
   spriteInfo[F("ready")] = spriteEffectId != 255;
@@ -106,7 +167,7 @@ void modeWindUsermod() {
     SEGMENT.fill(SEGCOLOR(0));
     return;
   }
-  renderWindToSegment(SEGMENT);
+  renderWindToSegment(SEGMENT, windControls[strip.getCurrSegmentId()].gust, windControls[strip.getCurrSegmentId()].spawnRateTenths);
 }
 
 } // namespace sprite_usermod
@@ -123,8 +184,13 @@ class SpriteUsermod : public Usermod {
       sprite_usermod::addSpriteInfo(root);
     }
 
+    void addToJsonState(JsonObject &root) override {
+      sprite_usermod::addWindState(root);
+    }
+
     void readFromJsonState(JsonObject &root) override {
       sprite_usermod::readSpriteState(root);
+      sprite_usermod::readWindState(root);
     }
 };
 

@@ -139,16 +139,43 @@ leave the segment on either axis re-enter at the upwind edge.
 | WLED control | Label in UI      | Description                                                                                                          |
 | ------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Color 1..3   | `Particle A/B/C` | The three particle colors. Each particle owns one of them. Leave B and C black for a uniform field.                   |
-| Speed        | `Gust speed`     | Horizontal travel speed, roughly 3 px/s at `1` and 60 px/s at `255`. `0` freezes the field.                           |
-| Intensity    | `Density`        | Active particle count. `0` disables particles.                                                                       |
+| Speed        | `Mean speed`     | Horizontal travel speed, roughly 3 px/s at `1` and 60 px/s at `255`. `0` freezes the field.                           |
+| Intensity    | `Density`        | Active particle count. `0` disables particles; `1` is a single-particle trickle.                                                                       |
 | Custom 1     | `Flutter`        | Vertical sine wobble. `128` is roughly ±1 px, `255` roughly ±2 px. `0` makes particles slide flat.                    |
 | Custom 2     | `Vertical drift` | `128` is level flight; above it particles settle as they cross, below it they lift. ±16 px/s at the extremes.         |
 | Custom 3     | `Streak length`  | Trailing pixels behind each particle, drawn straight upwind. `0` (bare particles) suits leaves; 2-3 suits spindrift.  |
 | Check 1      | `Blow left`      | Reverses travel. Off blows right.                                                                                    |
 
+An optional `wind_gust` JSON field on each segment sets the gust ceiling
+(0–255, same scale as `sx`). For example, `{"seg":[{"id":8,"sx":100,"wind_gust":220,"ix":15}]}`
+gives sparse particles with speeds ranging from mean wind to the gust ceiling.
+Zero, missing on effect selection, or a ceiling below `sx` gives steady mean
+wind. Partial updates without `wind_gust` preserve the current ceiling.
+
+Neoblaster also supplies `wind_spawn_rate` in particles per second (0–3,
+rounded to tenths). This starts with an empty panel and emits at the upwind
+edge with ±30% timing jitter. Exiting particles expire; speed changes never
+cause extra births. Zero drains the field, and `sx=0` pauses both motion and
+emission. A missing or negative rate on effect selection keeps standalone
+Wind's original intensity-driven population. In rate mode, nonzero `ix` enables
+the particle pool; its value does not set the live count. Neoblaster uses `ix:1`
+so ordinary preset restores remain sparse before it reapplies the rate.
+
+The effect samples smooth pulses with varying 7–14 second periods only when a
+particle spawns. Velocities remain fixed during flight; depth still makes distant
+particles slower and dimmer. Gust timing is independent of density. `sx=0`
+pauses all motion and the direction checkbox reverses existing flights.
+
+WLED's usermod state hook runs before it serializes segments, so `/json/state`
+reports top-level `wind_gust` and `wind_spawn_rate` arrays indexed by segment id.
+A rate of `-1` denotes the legacy population mode.
+Neoblaster merges those into the corresponding live segments. Controls follow
+its fixed segment ids; ordinary WLED presets do not serialize this extension,
+so the scene controller reapplies the gust ceiling after a preset restore.
+
 Suggested starting points:
 
-| Look        | Particle colors        | Gust speed | Density | Flutter | Vertical drift | Streak |
+| Look        | Particle colors        | Mean speed | Density | Flutter | Vertical drift | Streak |
 | ----------- | ---------------------- | ---------- | ------- | ------- | -------------- | ------ |
 | Autumn leaves | Yellow / red / brown | Medium     | Low-medium | High | Slightly settling | 0   |
 | Summer grit | Three dark neutrals    | Medium     | Low     | Low     | Slightly settling | 0    |

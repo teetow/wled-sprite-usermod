@@ -61,6 +61,8 @@ static void section(const std::string &title) {
 struct WindRig {
   Segment seg;
   uint32_t startMs;
+  uint8_t gustSpeed = 0;
+  int16_t spawnRateTenths = -1;
 
   WindRig(uint16_t width = 32, uint16_t height = 16, uint32_t startMs = 1000)
       : seg(width, height), startMs(startMs) {
@@ -80,7 +82,7 @@ struct WindRig {
   void step(uint32_t deltaMs = 33) {
     currentSegment = &seg;
     strip.now += deltaMs;
-    renderWindToSegment(seg);
+    renderWindToSegment(seg, gustSpeed, spawnRateTenths);
   }
 
   WindState *state() { return reinterpret_cast<WindState *>(seg.data); }
@@ -260,6 +262,134 @@ static void testGustSpeed() {
   checkNear(frozen.meanX(), frozenStart, 0.001, "sx=0 freezes the field in place");
 }
 
+static void testGustWaves() {
+  section("Gust waves change newly spawned speeds without accelerating live particles");
+  WindRig rig;
+  rig.seg.speed = 70;
+  rig.seg.intensity = 90;
+  rig.seg.custom1 = 0;
+  rig.seg.custom2 = 128;
+  rig.gustSpeed = 240;
+  rig.step();
+  const uint16_t target = rig.state()->activeTarget;
+  unsigned stableFlights = 0, speedChanges = 0;
+  bool constantFlightSpeed = true, bounded = true, fixedDensity = true;
+  int minSpeed = 255, maxSpeed = 0, maxStep = 0;
+  int lastSpeed = rig.state()->spawnSpeed;
+  std::set<uint16_t> periods;
+  for (int frame = 0; frame < 2400; frame++) {
+    const WindParticle before = rig.particles()[0];
+    rig.step();
+    const WindParticle &after = rig.particles()[0];
+    if (before.seed == after.seed && after.x >= before.x) {
+      stableFlights++;
+      if (after.vx != before.vx) constantFlightSpeed = false;
+    } else if (after.vx != before.vx) speedChanges++;
+    const int speed = rig.state()->spawnSpeed;
+    minSpeed = min(minSpeed, speed);
+    maxSpeed = max(maxSpeed, speed);
+    maxStep = max(maxStep, std::abs(speed - lastSpeed));
+    lastSpeed = speed;
+    periods.insert(rig.state()->gustDurationMs);
+    if (rig.state()->activeTarget != target) fixedDensity = false;
+    for (uint16_t i = 0; i < target; i++) {
+      const WindParticle &p = rig.particles()[i];
+      const int depth = 140 + (uint16_t(p.seed) >> 1);
+      const int low = (windBaseSpeed(rig.seg.speed) * depth) >> 8;
+      const int high = (windBaseSpeed(rig.gustSpeed) * depth) >> 8;
+      if (p.vx < low || p.vx > high) bounded = false;
+    }
+  }
+  check(stableFlights > 2000 && constantFlightSpeed, "speed stays fixed throughout uninterrupted flights");
+  check(speedChanges > 20, "recycled particles sample different speeds as gusts pass");
+  check(bounded, "all speeds remain between mean and gust, projected through particle depth");
+  check(fixedDensity, "gust waves never change the particle count");
+  check(minSpeed == 70 && maxSpeed >= 235, "waves reach both lulls and near the gust ceiling");
+  check(maxStep <= 6, "the spawn-speed envelope changes smoothly");
+  check(periods.size() >= 4 && *periods.begin() >= 7000 && *periods.rbegin() <= 14000,
+        "successive gusts vary in duration between 7 and 14 seconds");
+
+  // Same start time with different densities gives exactly the same air rhythm.
+  auto envelope = [](uint8_t density, uint32_t start) {
+    WindRig r(32, 16, start);
+    r.seg.intensity = density;
+    r.seg.speed = 70;
+    r.gustSpeed = 240;
+    std::vector<uint8_t> speeds;
+    for (int i = 0; i < 1200; i++) { r.step(); speeds.push_back(r.state()->spawnSpeed); }
+    return speeds;
+  };
+  check(envelope(1, 1000) == envelope(255, 1000), "density cannot alter gust timing");
+  check(envelope(1, 0xFFFFFF00U) != std::vector<uint8_t>(1200, 70), "gust clock keeps running across millis wraparound");
+
+  for (uint8_t gust : {uint8_t(0), uint8_t(40), uint8_t(70)}) {
+    rig.gustSpeed = gust;
+    bool steady = true;
+    for (int frame = 0; frame < 450; frame++) {
+      rig.step();
+      if (rig.state()->spawnSpeed != 70) steady = false;
+    }
+    check(steady, "missing/equal/lower gust ceiling gives steady mean wind");
+  }
+
+  WindRig paused;
+  paused.seg.speed = 0;
+  paused.step();
+  paused.seg.speed = 70;
+  paused.step();
+  check(paused.particles()[0].vx > 0, "particles born while paused resume moving");
+}
+
+static void testTimedSpawning() {
+  section("Timed spawning meters arrivals independently of motion");
+  auto births = [](int16_t rate, uint8_t speed, uint8_t gust, uint32_t dt) {
+    WindRig rig;
+    rig.seg.speed = speed;
+    rig.gustSpeed = gust;
+    rig.spawnRateTenths = rate;
+    rig.seg.intensity = 1; // same sparse preset fallback as the real scene
+    rig.seg.custom1 = 0;
+    rig.seg.custom2 = 128;
+    rig.step();
+    check(rig.litPixels() == 0, "rate mode starts empty instead of prefilling the panel");
+    unsigned born = 0;
+    bool edgeOnly = true;
+    for (uint32_t elapsed = 0; elapsed < 120000; elapsed += dt) {
+      std::vector<WindParticle> before(rig.particles(), rig.particles() + rig.state()->particleCount);
+      rig.step(dt);
+      for (uint16_t i = 0; i < rig.state()->particleCount; i++) {
+        const auto &p = rig.particles()[i];
+        if (p.state && (!before[i].state || p.x < before[i].x)) {
+          born++;
+          if (p.x >= 0) edgeOnly = false;
+        }
+      }
+    }
+    check(edgeOnly, "new particles enter from outside the upwind edge");
+    return born;
+  };
+  const unsigned slow = births(5, 70, 70, 20);
+  checkNear(slow, 60, 6, "0.5/s produces about 60 births in two minutes");
+  check(births(5, 240, 255, 20) == slow, "faster wind and gusts do not increase birth count");
+  checkNear(births(30, 70, 240, 20), 360, 36, "3/s produces about 360 births in two minutes");
+  check(births(5, 70, 70, 50) == slow, "spawn rate is independent of frame rate");
+
+  WindRig rig;
+  rig.spawnRateTenths = 5;
+  rig.seg.intensity = 1; // same sparse preset fallback as the real scene
+  for (int i = 0; i < 150; i++) rig.step();
+  rig.spawnRateTenths = 0;
+  for (int i = 0; i < 600; i++) rig.step();
+  check(rig.litPixels() == 0, "rate zero lets existing particles finish without replacements");
+  rig.spawnRateTenths = 5;
+  rig.step(5000);
+  check(rig.litPixels() == 0 && rig.state()->spawnProgress <= 500,
+        "a stall or rate restart cannot release a catch-up burst");
+  rig.seg.speed = 0;
+  for (int i = 0; i < 300; i++) rig.step();
+  check(rig.state()->spawnProgress == 0, "paused motion does not accumulate births");
+}
+
 static void testDensity() {
   section("Density maps intensity to live particles");
 
@@ -267,6 +397,11 @@ static void testDensity() {
   empty.seg.intensity = 0;
   for (int i = 0; i < 5; i++) empty.step();
   check(empty.litPixels() == 0, "ix=0 draws nothing");
+
+  WindRig trickle;
+  trickle.seg.intensity = 1;
+  trickle.step();
+  check(trickle.state()->activeTarget == 1, "ix=1 supports a single-particle trickle");
 
   WindRig sparse;
   sparse.seg.intensity = 30;
@@ -610,7 +745,9 @@ int main(int argc, char **argv) {
 
   testTravelDirection();
   testGustSpeed();
+  testGustWaves();
   testDensity();
+  testTimedSpawning();
   testRecycling();
   testRespawnMargin();
   testFlutter();

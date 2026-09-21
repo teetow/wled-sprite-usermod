@@ -206,7 +206,7 @@ static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
 static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Night depth,,,,Gradient;;!;2;sx=128,ix=160";
-static const char _data_FX_MODE_WIND[] PROGMEM = "Wind@Gust speed,Density,Flutter,Vertical drift,Streak length,Blow left;Particle A,Particle B,Particle C;!;2;sx=128,ix=90,c1=110,c2=150,c3=0";
+static const char _data_FX_MODE_WIND[] PROGMEM = "Wind@Mean speed,Density,Flutter,Vertical drift,Streak length,Blow left;Particle A,Particle B,Particle C;!;2;sx=128,ix=90,c1=110,c2=150,c3=0";
 
 void modeSpriteUsermod();
 void modePrecipitationUsermod();
