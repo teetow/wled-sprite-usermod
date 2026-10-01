@@ -23,6 +23,7 @@
 
 namespace sprite_usermod {
 #include "../wind_effect.hpp"
+#include "../leaves_effect.hpp"
 }  // namespace sprite_usermod
 
 using namespace sprite_usermod;
@@ -62,6 +63,7 @@ struct WindRig {
   Segment seg;
   uint32_t startMs;
   uint8_t gustSpeed = 0;
+  uint8_t gustActivity = 0;
   int16_t spawnRateTenths = -1;
 
   WindRig(uint16_t width = 32, uint16_t height = 16, uint32_t startMs = 1000)
@@ -82,7 +84,7 @@ struct WindRig {
   void step(uint32_t deltaMs = 33) {
     currentSegment = &seg;
     strip.now += deltaMs;
-    renderWindToSegment(seg, gustSpeed, spawnRateTenths);
+    renderWindToSegment(seg, gustSpeed, spawnRateTenths, gustActivity);
   }
 
   WindState *state() { return reinterpret_cast<WindState *>(seg.data); }
@@ -263,81 +265,140 @@ static void testGustSpeed() {
 }
 
 static void testGustWaves() {
-  section("Gust waves change newly spawned speeds without accelerating live particles");
-  WindRig rig;
+  section("One spatial front changes existing particles and crosses downwind");
+  uint32_t peakTime = 0;
+  while (peakTime < 60000 && gustFieldStrength(7, peakTime, false) < 0.5f) peakTime += 50;
+  check(peakTime < 60000, "a strong front reaches the sampled column");
+  const float sample = gustFieldStrength(7, peakTime, false);
+  checkNear(gustFieldStrength(23, peakTime + 1600, false), sample, 0.00001,
+            "the same front reaches the next column 1.6 seconds later");
+  uint32_t leftPeakTime = 0;
+  while (leftPeakTime < 60000 && gustFieldStrength(7, leftPeakTime, true) < 0.5f)
+    leftPeakTime += 50;
+  check(leftPeakTime < 60000, "a strong front also reaches the column from the right");
+  checkNear(gustFieldStrength(-9, leftPeakTime + 1600, true),
+            gustFieldStrength(7, leftPeakTime, true), 0.00001,
+            "reversing the bearing also reverses the front");
+  unsigned lulls = 0, peaks = 0;
+  unsigned strongFronts = 0;
+  float frontPeak = 0.0f;
+  for (uint32_t ms = 0; ms < 60000; ms += 50) {
+    const float pulse = gustFieldStrength(16, ms, false);
+    lulls += pulse == 0;
+    peaks += pulse > 0.8f;
+    frontPeak = max(frontPeak, pulse);
+    if (pulse == 0 && frontPeak > 0) {
+      strongFronts += frontPeak >= 0.88f;
+      frontPeak = 0;
+    }
+  }
+  check(lulls > 400 && peaks > 50, "the front has long lulls and strong peaks");
+  check(strongFronts >= 5, "successive gusts keep nearly full-strength peaks");
+  unsigned extraCrests = 0;
+  for (uint32_t ms = 0; ms < 60000; ms += 50) {
+    const float base = gustFieldStrength(16, ms, false, 0);
+    const float active = gustFieldStrength(16, ms, false, 128);
+    extraCrests += base == 0 && active > 0.88f;
+  }
+  check(extraCrests > 20, "sustained wind adds full-strength gusts inside former lulls");
+  float rolloverJump = 0;
+  for (int x = 0; x < 32; x++)
+    rolloverJump = max(rolloverJump, fabsf(gustFieldStrength(x, 0xFFFFFFFFU, false)
+                                         - gustFieldStrength(x, 0, false)));
+  check(rolloverJump < 0.01f, "the front stays smooth across millis rollover");
+
+  WindRig rig(128, 16);
   rig.seg.speed = 70;
-  rig.seg.intensity = 90;
-  rig.seg.custom1 = 0;
   rig.seg.custom2 = 128;
   rig.gustSpeed = 240;
   rig.step();
-  const uint16_t target = rig.state()->activeTarget;
-  unsigned stableFlights = 0, speedChanges = 0;
-  bool constantFlightSpeed = true, bounded = true, fixedDensity = true;
-  int minSpeed = 255, maxSpeed = 0, maxStep = 0;
-  int lastSpeed = rig.state()->spawnSpeed;
-  std::set<uint16_t> periods;
-  for (int frame = 0; frame < 2400; frame++) {
-    const WindParticle before = rig.particles()[0];
+  WindParticle &particle = rig.particles()[0];
+  const int depth = 140 + (uint16_t(particle.seed) >> 1);
+  const int low = windBaseSpeed(rig.seg.speed) * depth / 256;
+  const int high = windBaseSpeed(rig.gustSpeed) * depth / 256;
+  int slowest = 255, fastest = 0;
+  bool bounded = true;
+  for (int frame = 0; frame < 1200; frame++) {
+    // Hold this one leaf at a fixed column to isolate the changing field.
+    particle.x = 40 * WIND_FP_SCALE;
     rig.step();
-    const WindParticle &after = rig.particles()[0];
-    if (before.seed == after.seed && after.x >= before.x) {
-      stableFlights++;
-      if (after.vx != before.vx) constantFlightSpeed = false;
-    } else if (after.vx != before.vx) speedChanges++;
-    const int speed = rig.state()->spawnSpeed;
-    minSpeed = min(minSpeed, speed);
-    maxSpeed = max(maxSpeed, speed);
-    maxStep = max(maxStep, std::abs(speed - lastSpeed));
-    lastSpeed = speed;
-    periods.insert(rig.state()->gustDurationMs);
-    if (rig.state()->activeTarget != target) fixedDensity = false;
-    for (uint16_t i = 0; i < target; i++) {
-      const WindParticle &p = rig.particles()[i];
-      const int depth = 140 + (uint16_t(p.seed) >> 1);
-      const int low = (windBaseSpeed(rig.seg.speed) * depth) >> 8;
-      const int high = (windBaseSpeed(rig.gustSpeed) * depth) >> 8;
-      if (p.vx < low || p.vx > high) bounded = false;
-    }
+    slowest = min(slowest, int(particle.vx));
+    fastest = max(fastest, int(particle.vx));
+    bounded &= particle.vx >= low && particle.vx <= high;
   }
-  check(stableFlights > 2000 && constantFlightSpeed, "speed stays fixed throughout uninterrupted flights");
-  check(speedChanges > 20, "recycled particles sample different speeds as gusts pass");
-  check(bounded, "all speeds remain between mean and gust, projected through particle depth");
-  check(fixedDensity, "gust waves never change the particle count");
-  check(minSpeed == 70 && maxSpeed >= 235, "waves reach both lulls and near the gust ceiling");
-  check(maxStep <= 6, "the spawn-speed envelope changes smoothly");
-  check(periods.size() >= 4 && *periods.begin() >= 7000 && *periods.rbegin() <= 14000,
-        "successive gusts vary in duration between 7 and 14 seconds");
-
-  // Same start time with different densities gives exactly the same air rhythm.
-  auto envelope = [](uint8_t density, uint32_t start) {
-    WindRig r(32, 16, start);
-    r.seg.intensity = density;
-    r.seg.speed = 70;
-    r.gustSpeed = 240;
-    std::vector<uint8_t> speeds;
-    for (int i = 0; i < 1200; i++) { r.step(); speeds.push_back(r.state()->spawnSpeed); }
-    return speeds;
-  };
-  check(envelope(1, 1000) == envelope(255, 1000), "density cannot alter gust timing");
-  check(envelope(1, 0xFFFFFF00U) != std::vector<uint8_t>(1200, 70), "gust clock keeps running across millis wraparound");
+  check(slowest == low && fastest > low + 15,
+        "a leaf already in flight slows and accelerates as fronts pass");
+  check(bounded, "live speeds stay between mean and gust after parallax");
 
   for (uint8_t gust : {uint8_t(0), uint8_t(40), uint8_t(70)}) {
     rig.gustSpeed = gust;
-    bool steady = true;
-    for (int frame = 0; frame < 450; frame++) {
-      rig.step();
-      if (rig.state()->spawnSpeed != 70) steady = false;
-    }
-    check(steady, "missing/equal/lower gust ceiling gives steady mean wind");
+    particle.x = 40 * WIND_FP_SCALE;
+    rig.step();
+    check(particle.vx == low, "missing or lower gust ceiling gives steady mean wind");
   }
 
-  WindRig paused;
-  paused.seg.speed = 0;
-  paused.step();
-  paused.seg.speed = 70;
-  paused.step();
-  check(paused.particles()[0].vx > 0, "particles born while paused resume moving");
+  WindRig gustOnly;
+  gustOnly.seg.speed = 0;
+  gustOnly.gustSpeed = 240;
+  gustOnly.spawnRateTenths = 5;
+  gustOnly.seg.intensity = 1;
+  for (int frame = 0; frame < 500; frame++) gustOnly.step();
+  unsigned live = 0;
+  for (uint16_t i = 0; i < gustOnly.state()->particleCount; i++)
+    live += gustOnly.particles()[i].state != 0;
+  check(live > 0, "gust-only wind can spawn and wait through a lull");
+}
+
+static void testSharedGroundFront() {
+  section("Air and ground respond to one front at the same absolute column");
+  WindRig air;
+  air.seg.speed = 70;
+  air.seg.custom2 = 128;
+  air.gustSpeed = 240;
+  air.gustActivity = 128;
+  air.step();
+  Segment ground(24, 6);
+  ground.start = 4;
+  ground.speed = 39;
+  ground.custom2 = 76;
+  ground.custom1 = 128;
+  ground.intensity = 10;
+  strip.now = 1033;
+  renderLeavesToSegment(ground);
+
+  uint32_t lullTime = 0, peakTime = 0;
+  for (uint32_t t = 2000; t < 60000 && (!lullTime || !peakTime); t += 50) {
+    const float pulse = gustFieldStrength(12, t, false, 128);
+    if (!lullTime && pulse == 0) lullTime = t;
+    if (!peakTime && gustFieldStrength(12, t, false, 0) == 0 && pulse > 0.8f)
+      peakTime = t;
+  }
+  check(lullTime && peakTime, "the shared column sees both a lull and a crest");
+
+  auto sample = [&](uint32_t now) {
+    WindParticle &flying = air.particles()[0];
+    flying.x = 12 * WIND_FP_SCALE;
+    flying.y = 8 * WIND_FP_SCALE;
+    flying.state = 1;
+    air.state()->lastUpdate = now - 50;
+    strip.now = now;
+    renderWindToSegment(air.seg, air.gustSpeed, -1, air.gustActivity);
+    const int airSpeed = flying.vx;
+
+    LeavesState &litter = *reinterpret_cast<LeavesState *>(ground.data);
+    LeafParticle &leaf = litter.particles[0];
+    leaf.x = 8;
+    leaf.y = 3;
+    leaf.active = true;
+    leaf.age = 15000;
+    litter.lastUpdate = now - 50;
+    renderLeavesToSegment(ground);
+    return std::pair<int, float>{airSpeed, leaf.x - 8};
+  };
+  const auto lull = sample(lullTime);
+  const auto crest = sample(peakTime);
+  check(crest.first > lull.first && crest.second > lull.second * 2,
+        "the same front accelerates an existing air leaf and a ground leaf");
 }
 
 static void testTimedSpawning() {
@@ -370,7 +431,8 @@ static void testTimedSpawning() {
   };
   const unsigned slow = births(5, 70, 70, 20);
   checkNear(slow, 60, 6, "0.5/s produces about 60 births in two minutes");
-  check(births(5, 240, 255, 20) == slow, "faster wind and gusts do not increase birth count");
+  checkNear(births(5, 240, 255, 20), slow, 6,
+            "faster wind and gusts do not increase the emission rate");
   checkNear(births(30, 70, 240, 20), 360, 36, "3/s produces about 360 births in two minutes");
   check(births(5, 70, 70, 50) == slow, "spawn rate is independent of frame rate");
 
@@ -416,6 +478,17 @@ static void testDensity() {
   check(dense.state()->activeTarget == capacity, "ix=255 fills capacity");
   check(sparse.state()->activeTarget < dense.state()->activeTarget, "ix=30 is sparser than ix=255");
   check(sparse.litPixels() > 0, "ix=30 still draws particles");
+
+  WindRig spread;
+  spread.seg.intensity = 255;
+  spread.step();
+  std::set<std::pair<int, int>> occupied;
+  for (uint16_t i = 0; i < spread.state()->activeTarget; i++) {
+    const auto &p = spread.particles()[i];
+    occupied.insert({int(p.x >> WIND_FP_SHIFT), int(p.y >> WIND_FP_SHIFT)});
+  }
+  check(occupied.size() == spread.state()->activeTarget,
+        "initial airborne particles do not stack on the same pixel");
 }
 
 static void testRecycling() {
@@ -746,6 +819,7 @@ int main(int argc, char **argv) {
   testTravelDirection();
   testGustSpeed();
   testGustWaves();
+  testSharedGroundFront();
   testDensity();
   testTimedSpawning();
   testRecycling();

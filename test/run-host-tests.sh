@@ -11,3 +11,7 @@ g++ -std=c++17 -O1 -Wall -Wno-unused-function \
   -o "$OUT_DIR/wind_harness" "$TEST_DIR/wind_harness.cpp"
 
 "$OUT_DIR/wind_harness" "$@"
+
+g++ -std=c++17 -O1 -Wall -Wno-unused-function \
+  -o "$OUT_DIR/leaves_harness" "$TEST_DIR/leaves_harness.cpp"
+"$OUT_DIR/leaves_harness"

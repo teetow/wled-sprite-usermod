@@ -11,6 +11,8 @@
   grit, spindrift, embers. It is the horizontal sibling of `Precipitation`,
   with flutter instead of splashes and three particle colors instead of a
   head/trail gradient.
+- `Leaves` keeps persistent litter on the ground and optionally sheds sparse
+  leaves from Neoblaster's tree canopy, with long fades after landing.
 
 ## Supported targets
 
@@ -139,7 +141,7 @@ leave the segment on either axis re-enter at the upwind edge.
 | WLED control | Label in UI      | Description                                                                                                          |
 | ------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Color 1..3   | `Particle A/B/C` | The three particle colors. Each particle owns one of them. Leave B and C black for a uniform field.                   |
-| Speed        | `Mean speed`     | Horizontal travel speed, roughly 3 px/s at `1` and 60 px/s at `255`. `0` freezes the field.                           |
+| Speed        | `Mean speed`     | Horizontal travel speed, roughly 3 px/s at `1` and 60 px/s at `255`. `0` leaves only gust motion.                           |
 | Intensity    | `Density`        | Active particle count. `0` disables particles; `1` is a single-particle trickle.                                                                       |
 | Custom 1     | `Flutter`        | Vertical sine wobble. `128` is roughly ±1 px, `255` roughly ±2 px. `0` makes particles slide flat.                    |
 | Custom 2     | `Vertical drift` | `128` is level flight; above it particles settle as they cross, below it they lift. ±16 px/s at the extremes.         |
@@ -150,24 +152,38 @@ An optional `wind_gust` JSON field on each segment sets the gust ceiling
 (0–255, same scale as `sx`). For example, `{"seg":[{"id":8,"sx":100,"wind_gust":220,"ix":15}]}`
 gives sparse particles with speeds ranging from mean wind to the gust ceiling.
 Zero, missing on effect selection, or a ceiling below `sx` gives steady mean
-wind. Partial updates without `wind_gust` preserve the current ceiling.
+wind. With a positive gust ceiling, `sx=0` allows particles to wait motionless
+between fronts. Partial updates without `wind_gust` preserve the current ceiling.
+The optional `wind_gust_activity` byte (0–255) opens a second, shorter front
+during the lull. It changes duration without weakening the crest. Neoblaster
+sends the same value to airborne Wind and ground Leaves; a full effect selection
+without it defaults to zero.
 
 Neoblaster also supplies `wind_spawn_rate` in particles per second (0–3,
 rounded to tenths). This starts with an empty panel and emits at the upwind
 edge with ±30% timing jitter. Exiting particles expire; speed changes never
-cause extra births. Zero drains the field, and `sx=0` pauses both motion and
-emission. A missing or negative rate on effect selection keeps standalone
+cause extra births. New particles choose the most open of a few sampled
+positions or entry rows, avoiding piles while waiting for a gust. Zero drains
+the field; `sx=0` pauses emission only when
+the gust ceiling is also zero. A missing or negative rate on effect selection keeps standalone
 Wind's original intensity-driven population. In rate mode, nonzero `ix` enables
 the particle pool; its value does not set the live count. Neoblaster uses `ix:1`
 so ordinary preset restores remain sparse before it reapplies the rate.
 
-The effect samples smooth pulses with varying 7–14 second periods only when a
-particle spawns. Velocities remain fixed during flight; depth still makes distant
-particles slower and dimmer. Gust timing is independent of density. `sx=0`
-pauses all motion and the direction checkbox reverses existing flights.
+Each flying particle samples a shared gust field at its current absolute panel
+column every frame. Each front rises quickly, holds a short, nearly flat peak,
+then eases off into a long lull. Non-harmonic waves bend the timing, while peak
+strength stays between 90% and 100% of the gust ceiling. Increasing activity
+adds a second full-strength crest between the regular fronts. Fronts travel
+downwind at about 10 pixels per second.
+Ground Leaves samples the same field, so leaves at a given column receive the
+same gust strength. Existing airborne particles accelerate and slow; depth
+still makes distant particles slower and dimmer. The direction checkbox
+reverses both their travel and the front.
 
 WLED's usermod state hook runs before it serializes segments, so `/json/state`
-reports top-level `wind_gust` and `wind_spawn_rate` arrays indexed by segment id.
+reports top-level `wind_gust`, `wind_gust_activity`, and `wind_spawn_rate`
+arrays indexed by segment id.
 A rate of `-1` denotes the legacy population mode.
 Neoblaster merges those into the corresponding live segments. Controls follow
 its fixed segment ids; ordinary WLED presets do not serialize this extension,
@@ -184,6 +200,50 @@ Suggested starting points:
 
 Particles carry the same parallax as `Precipitation`: each one's seed doubles
 as a depth value, so background particles travel slower and render dimmer.
+
+## Leaves controls
+
+Use two `Leaves` segments: one covering the ground band, and one covering the
+6x7 Neoblaster tree plus a landing row below its trunk, with `Tree shedding`
+enabled. The latter contributes extra leaves beneath the tree. Use alpha-over
+blending (17). Neoblaster owns calendar activation, snow suppression and colors.
+
+| Control | Meaning |
+| --- | --- |
+| Color 1–3 | Tree autumn palette: yellow, red, brown |
+| Speed | Mean ground motion, 0–255; quadratic speed scale, up to 60 px/s; zero allows motion from gusts alone |
+| Intensity | Ground density, up to one leaf per eight pixels, capped at 32; shedding mode uses it as opacity |
+| Custom 1 | Shedding: remaining tree foliage, 0–255. Ground: shared gust activity, 0–255 |
+| Custom 2 | Gust ceiling, same quadratic scale as Speed |
+| Custom 3 | Tree autumn progress, 0–31 |
+| Check 1 | Blow left |
+| Check 2 | Tree shedding instead of ground litter |
+
+Shedding uses one or two independent sources from Neoblaster's present, turned
+canopy cells. Each fades in on the tree for 10 seconds, falls with gravity to
+the ground in 2 seconds, fades out there for 10 seconds, then waits 12–22
+seconds before choosing a new source. A second source starts at a different
+time and prefers a separate canopy column. At most two leaves are airborne at once.
+Tree-fallen leaves stay in their source column while falling and after landing,
+regardless of wind controls; the separate ground-litter segment handles wind.
+Ground litter chooses open positions with a best-candidate sampler and fades in
+over 15 seconds. Its seasonal density persists, but a leaf blown off the panel
+is replaced near the upwind edge with a new row and color instead of replaying
+the same lap. Sparse leaves avoid sharing a column across rows; wind-driven
+leaves gently separate if a front presses them together. Calm leaves stay fixed.
+Mean wind moves grounded leaves continuously;
+gusts add bursts, and gust-only wind leaves them still between peaks. Exact
+calm keeps them fixed. Neoblaster derives both mean and gust speed from the
+whole-panel Wind particles, with ground friction decreasing as wind rises;
+ground and airborne speeds meet around 17 m/s. All leaves occupy one pixel,
+even while falling. The
+fixed particle state uses under
+1 KB per segment. All controls are ordinary WLED segment fields.
+
+The canopy template and coordinate hash in `leaves_effect.hpp` mirror
+Neoblaster's `src/tree.ts`; update both if the tree silhouette changes.
+`test/leaves_harness.cpp` exercises the shipped effect with a deterministic clock.
+Discovery reports `info.sprite_usermod.leaves_fxid`.
 
 ## Starfield controls
 

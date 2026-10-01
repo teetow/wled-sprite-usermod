@@ -13,7 +13,9 @@
 // includes it against a stub Segment to step particle motion deterministically
 // on a host, with no ESP32 and no panel.
 
-constexpr uint32_t WIND_STATE_MAGIC = 0x574E4433UL;
+#include "gust_field.hpp"
+
+constexpr uint32_t WIND_STATE_MAGIC = 0x574E4434UL;
 constexpr uint16_t WIND_MAX_PARTICLES = 128;
 constexpr uint8_t WIND_FP_SHIFT = 8;
 constexpr int16_t WIND_FP_SCALE = 1 << WIND_FP_SHIFT;
@@ -41,11 +43,8 @@ struct WindState {
   uint32_t magic;
   uint32_t lastUpdate;
   uint32_t prngState;
-  uint32_t gustPrngState;
-  uint16_t gustElapsedMs;
-  uint16_t gustDurationMs;
   uint8_t gustSpeed;
-  uint8_t spawnSpeed;
+  uint8_t gustActivity;
   bool timedSpawning;
   uint32_t spawnProgress;
   uint16_t spawnThreshold;
@@ -66,26 +65,6 @@ uint16_t windRandom(WindState &state, uint16_t upperExclusive) {
   state.prngState ^= state.prngState >> 17;
   state.prngState ^= state.prngState << 5;
   return uint16_t(state.prngState % upperExclusive);
-}
-
-// A separate clock/PRNG keeps the gust rhythm independent of particle density.
-// Smooth pulses return to mean wind between peaks; changing duration each cycle
-// avoids a visibly repeating metronome. The speed is sampled only at spawn.
-void advanceWindGust(WindState &state, const Segment &seg, uint16_t deltaMs) {
-  state.gustElapsedMs += deltaMs;
-  if (state.gustDurationMs == 0 || state.gustElapsedMs >= state.gustDurationMs) {
-    state.gustElapsedMs = state.gustDurationMs == 0 ? 0 : state.gustElapsedMs - state.gustDurationMs;
-    state.gustPrngState ^= state.gustPrngState << 13;
-    state.gustPrngState ^= state.gustPrngState >> 17;
-    state.gustPrngState ^= state.gustPrngState << 5;
-    state.gustDurationMs = 7000U + state.gustPrngState % 7001U;
-  }
-  const uint8_t phase = uint8_t(192U + (uint32_t(state.gustElapsedMs) * 256U) / state.gustDurationMs);
-  const uint16_t wave = sin8_t(phase);
-  // Squaring the wave leaves longer lulls and shorter peaks, without sharp edges.
-  const uint16_t amount = (wave * wave) / 255U;
-  const uint8_t ceiling = max<uint8_t>(seg.speed, state.gustSpeed);
-  state.spawnSpeed = seg.speed + (uint16_t(ceiling - seg.speed) * amount) / 255U;
 }
 
 uint16_t getWindParticleCapacity(uint16_t width, uint16_t height) {
@@ -130,7 +109,6 @@ bool ensureWindState(Segment &seg, WindState *&state) {
   state->magic = WIND_STATE_MAGIC;
   state->lastUpdate = strip.now;
   state->prngState = 0x1B873593UL ^ (uint32_t(width) << 16) ^ uint32_t(height) ^ strip.now;
-  state->gustPrngState = state->prngState ^ 0x9E3779B9UL;
   state->width = width;
   state->height = height;
   state->particleCount = capacity;
@@ -151,7 +129,8 @@ inline int32_t windDespawnMargin(const Segment &seg) {
   return int32_t(WIND_SPAWN_MARGIN_PX + seg.custom3 + 1) * WIND_FP_SCALE;
 }
 
-void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t spawnSpeed);
+void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t gustSpeed,
+                      uint8_t gustActivity);
 
 void respawnWindParticle(WindState &state, WindParticle &particle, const Segment &seg, bool startUpwind) {
   const uint16_t width = max<uint16_t>(1, state.width);
@@ -161,18 +140,45 @@ void respawnWindParticle(WindState &state, WindParticle &particle, const Segment
   particle.state = 1;
   particle.seed = uint8_t(windRandom(state, 255));
   particle.phase = uint8_t(windRandom(state, 255));
-  particle.y = int32_t(windRandom(state, height)) * WIND_FP_SCALE + windRandom(state, WIND_FP_SCALE);
 
-  if (startUpwind) {
-    // Between one and two pixels outside the upwind edge — inside the despawn
-    // margin, so the particle survives to actually fly.
-    const int32_t offset = int32_t(WIND_SPAWN_MARGIN_PX) * WIND_FP_SCALE - int32_t(windRandom(state, WIND_FP_SCALE));
-    particle.x = blowLeft ? (int32_t(width) * WIND_FP_SCALE + offset) : -offset;
-  } else {
-    particle.x = int32_t(windRandom(state, width)) * WIND_FP_SCALE + windRandom(state, WIND_FP_SCALE);
+  // Choose the most open of a few random positions. In rate mode, births still
+  // enter just outside the upwind edge, but avoid stacking on leaves waiting
+  // there for a gust. Initial population mode spreads across both dimensions.
+  int32_t bestX = 0, bestY = 0;
+  int64_t bestDistance = -1;
+  const WindParticle *others = getWindParticles(&state);
+  for (unsigned trial = 0; trial < 12; trial++) {
+    const int32_t y = int32_t(windRandom(state, height)) * WIND_FP_SCALE
+                      + windRandom(state, WIND_FP_SCALE);
+    int32_t x;
+    if (startUpwind) {
+      // One to two pixels outside the edge, inside the despawn margin.
+      const int32_t offset = int32_t(WIND_SPAWN_MARGIN_PX) * WIND_FP_SCALE
+                             - int32_t(windRandom(state, WIND_FP_SCALE));
+      x = blowLeft ? int32_t(width) * WIND_FP_SCALE + offset : -offset;
+    } else {
+      x = int32_t(windRandom(state, width)) * WIND_FP_SCALE
+          + windRandom(state, WIND_FP_SCALE);
+    }
+    int64_t nearest = 0x7fffffffffffffffLL;
+    for (uint16_t i = 0; i < state.particleCount; i++) {
+      const WindParticle &other = others[i];
+      if (!other.state || &other == &particle) continue;
+      const int64_t dx = (int64_t(x) - other.x) / WIND_FP_SCALE;
+      const int64_t dy = (int64_t(y) - other.y) / WIND_FP_SCALE;
+      nearest = min(nearest, dx * dx + dy * dy);
+    }
+    if (nearest > bestDistance) {
+      bestDistance = nearest;
+      bestX = x;
+      bestY = y;
+    }
+    if (nearest == 0x7fffffffffffffffLL) break;
   }
+  particle.x = bestX;
+  particle.y = bestY;
 
-  updateWindMotion(particle, seg, state.spawnSpeed);
+  updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
 }
 
 int16_t windBaseSpeed(uint8_t speed) {
@@ -181,12 +187,18 @@ int16_t windBaseSpeed(uint8_t speed) {
   return speed == 0 ? 0 : int16_t(map(speed, 1, 255, 3, 60));
 }
 
-void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t spawnSpeed) {
+void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t gustSpeed,
+                      uint8_t gustActivity) {
   // Parallax, same contract as precipitation: seed doubles as a depth value.
   // Background particles travel slower and render dimmer.
   const int16_t depthMul = int16_t(140 + (uint16_t(particle.seed) >> 1));  // 140..267
-  const int16_t gust = int16_t((int32_t(windBaseSpeed(spawnSpeed)) * depthMul) >> 8);
-  particle.vx = seg.check1 ? int16_t(-gust) : gust;
+  const float mean = windBaseSpeed(seg.speed);
+  const float ceiling = windBaseSpeed(max(seg.speed, gustSpeed));
+  const float x = float(particle.x) / WIND_FP_SCALE + seg.start;
+  const float pulse = ceiling > mean
+    ? gustFieldStrength(x, strip.now, seg.check1, gustActivity) : 0.0f;
+  const int16_t speed = int16_t((mean + (ceiling - mean) * pulse) * depthMul / 256.0f);
+  particle.vx = seg.check1 ? int16_t(-speed) : speed;
   // c2=128 is neutral, above it particles settle, below it they lift. ±16 px/s
   // at the extremes, scaled by the same depth so near particles fall faster.
   const int16_t drift = int16_t(int16_t(seg.custom2) - 128) / 8;
@@ -271,12 +283,9 @@ void updateWindParticle(WindState &state, WindParticle &particle, const Segment 
     return;
   }
 
-  if (seg.speed == 0) return;
-  // A particle born while paused needs a speed when playback resumes.
-  if (particle.vx == 0) updateWindMotion(particle, seg, state.spawnSpeed);
-  // Bearing changes turn the flow without changing its sampled speed.
-  const int16_t magnitude = particle.vx < 0 ? -particle.vx : particle.vx;
-  particle.vx = seg.check1 ? -magnitude : magnitude;
+  if (seg.speed == 0 && state.gustSpeed == 0) return;
+  // Existing particles respond to the shared front at their current column.
+  updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
 
   particle.x += (int32_t(particle.vx) * deltaMs * WIND_FP_SCALE) / 1000L;
   particle.y += (int32_t(particle.vy) * deltaMs * WIND_FP_SCALE) / 1000L;
@@ -297,7 +306,7 @@ void updateWindParticle(WindState &state, WindParticle &particle, const Segment 
 // recycling. Threshold jitter of +/-30% keeps a trickle from looking clockwork.
 // Budget units are milliseconds * tenths-of-a-particle/second: 10000 = one birth.
 void spawnTimedWind(WindState &state, const Segment &seg, int16_t rateTenths, uint16_t deltaMs) {
-  if (rateTenths <= 0 || seg.speed == 0 || state.activeTarget == 0) {
+  if (rateTenths <= 0 || (seg.speed == 0 && state.gustSpeed == 0) || state.activeTarget == 0) {
     state.spawnProgress = 0;
     return;
   }
@@ -315,7 +324,8 @@ void spawnTimedWind(WindState &state, const Segment &seg, int16_t rateTenths, ui
   // If the pool is full, drop this birth; never accumulate a catch-up burst.
 }
 
-void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0, int16_t spawnRateTenths = -1) {
+void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0,
+                         int16_t spawnRateTenths = -1, uint8_t gustActivity = 0) {
   WindState *state = nullptr;
   if (!ensureWindState(seg, state) || !state) {
     seg.fill(BLACK);
@@ -331,7 +341,7 @@ void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0, int16_t spawnRateT
   }
   state->timedSpawning = timed;
   state->gustSpeed = gustSpeed;
-  advanceWindGust(*state, seg, deltaMs);
+  state->gustActivity = gustActivity;
   state->activeTarget = timed && seg.intensity > 0
     ? state->particleCount : getWindActiveTarget(seg, state->particleCount);
 

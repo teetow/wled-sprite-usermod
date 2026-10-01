@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <cmath>
 #include <vector>
 
 // ── Arduino/FastLED-shaped helpers the effects call ──────────────────────────
@@ -78,12 +79,15 @@ class Segment {
   uint16_t vWidth() const { return _width; }
   uint16_t vHeight() const { return _height; }
 
+  uint16_t start = 0;
+
   uint8_t speed = 128;
   uint8_t intensity = 128;
   uint8_t custom1 = 0;
   uint8_t custom2 = 128;
   uint8_t custom3 = 0;
   bool check1 = false;
+  bool check2 = false;
   uint8_t blendMode = 17;  // alpha-over, which is what the panel scene uses
   uint32_t colors[3] = {0, 0, 0};
   uint8_t *data = nullptr;
@@ -119,6 +123,7 @@ class Segment {
   uint32_t pixel(int x, int y) const {
     return inBounds(x, y) ? _pixels[size_t(y) * _width + x] : 0;
   }
+  uint32_t getPixelColorXY(int x, int y) const { return pixel(x, y); }
 
   // Under alpha-over the effect writes color+alpha and lets the compositor
   // blend, so "lit" means a non-zero alpha channel.

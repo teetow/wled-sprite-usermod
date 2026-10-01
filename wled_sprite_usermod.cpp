@@ -14,11 +14,13 @@ namespace sprite_usermod {
 #include "dithered_gradient_effect.hpp"
 #include "starfield_effect.hpp"
 #include "wind_effect.hpp"
+#include "leaves_effect.hpp"
 
 // Optional per-segment gust ceiling in the same 0..255 scale as sx. Zero
 // falls back to sx. Stored outside effect data so resizing preserves controls.
 struct WindControls {
   uint8_t gust = 0;
+  uint8_t gustActivity = 0;
   int16_t spawnRateTenths = -1; // negative preserves the standalone density mode
 };
 static WindControls windControls[MAX_NUM_SEGMENTS];
@@ -35,6 +37,12 @@ void readWindSegment(JsonObject elem, int id) {
   } else if (elem.containsKey("fx")) {
     // A full effect selection/preset without this extension means steady wind.
     windControls[id].gust = 0;
+  }
+  if (elem.containsKey("wind_gust_activity")) {
+    const int value = elem["wind_gust_activity"] | 0;
+    windControls[id].gustActivity = uint8_t(max(0, min(255, value)));
+  } else if (elem.containsKey("fx")) {
+    windControls[id].gustActivity = 0;
   }
   if (elem.containsKey("wind_spawn_rate")) {
     const float rate = elem["wind_spawn_rate"] | -1.0f;
@@ -68,9 +76,11 @@ void readWindState(JsonObject &root) {
 // separately, indexed by segment id. Neoblaster folds it into the live segments.
 void addWindState(JsonObject &root) {
   JsonArray gusts = root.createNestedArray("wind_gust");
+  JsonArray activities = root.createNestedArray("wind_gust_activity");
   JsonArray rates = root.createNestedArray("wind_spawn_rate");
   for (unsigned id = 0; id < strip.getSegmentsNum(); id++) {
     gusts.add(strip.getSegment(id).mode == windEffectId ? windControls[id].gust : 0);
+    activities.add(strip.getSegment(id).mode == windEffectId ? windControls[id].gustActivity : 0);
     const int16_t rate = windControls[id].spawnRateTenths;
     rates.add(strip.getSegment(id).mode == windEffectId && rate >= 0 ? rate / 10.0f : -1.0f);
   }
@@ -84,6 +94,7 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("dithered_gradient_fxid")] = ditheredGradientEffectId;
   spriteInfo[F("starfield_fxid")] = starfieldEffectId;
   spriteInfo[F("wind_fxid")] = windEffectId;
+  spriteInfo[F("leaves_fxid")] = leavesEffectId;
   spriteInfo[F("mode")] = F("cache");
   spriteInfo[F("cache_generation")] = spriteCacheGeneration;
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
@@ -127,6 +138,7 @@ void registerEffect() {
   if (ditheredGradientEffectId == 255) ditheredGradientEffectId = strip.addEffect(255, &modeDitheredGradientUsermod, _data_FX_MODE_DITHERED_GRADIENT);
   if (starfieldEffectId == 255) starfieldEffectId = strip.addEffect(255, &modeStarfieldUsermod, _data_FX_MODE_STARFIELD);
   if (windEffectId == 255) windEffectId = strip.addEffect(255, &modeWindUsermod, _data_FX_MODE_WIND);
+  if (leavesEffectId == 255) leavesEffectId = strip.addEffect(255, &modeLeavesUsermod, _data_FX_MODE_LEAVES);
 }
 
 void modeSpriteUsermod() {
@@ -167,7 +179,17 @@ void modeWindUsermod() {
     SEGMENT.fill(SEGCOLOR(0));
     return;
   }
-  renderWindToSegment(SEGMENT, windControls[strip.getCurrSegmentId()].gust, windControls[strip.getCurrSegmentId()].spawnRateTenths);
+  renderWindToSegment(SEGMENT, windControls[strip.getCurrSegmentId()].gust,
+                      windControls[strip.getCurrSegmentId()].spawnRateTenths,
+                      windControls[strip.getCurrSegmentId()].gustActivity);
+}
+
+void modeLeavesUsermod() {
+  if (!strip.isMatrix || !SEGMENT.is2D()) {
+    SEGMENT.fill(BLACK);
+    return;
+  }
+  renderLeavesToSegment(SEGMENT);
 }
 
 } // namespace sprite_usermod
