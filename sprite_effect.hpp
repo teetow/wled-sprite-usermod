@@ -909,6 +909,7 @@ uint32_t buildRenderKey(const Segment &seg, const SpriteState &state, uint32_t m
   key ^= uint32_t(seg.check2) << 3;
   key ^= uint32_t(seg.check3) << 4;
   key ^= uint32_t(seg.palette) << 16;
+  key ^= uint32_t(seg.custom2) << 26;
   key ^= rotl32(seg.colors[0], 5);
   key ^= rotl32(seg.colors[1], 13);
   key ^= rotl32(seg.colors[2], 21);
@@ -969,7 +970,8 @@ void blendSpritePixel(const SpriteRenderContext &context, int16_t destX, int16_t
   if (alpha == 0) return;
   if ((unsigned)destX >= context.segmentWidth || (unsigned)destY >= context.segmentHeight) return;
 
-  const uint32_t outputColor = context.useMask ? getMaskColor(context, destX, destY) : sourceColor;
+  uint32_t outputColor = context.useMask ? getMaskColor(context, destX, destY) : sourceColor;
+  if (context.shade < 255) outputColor = color_fade(outputColor, context.shade);
   // 17 = alpha-over, 18 = holdout. Both need coverage stored in W: alpha-over composites it to
   // the output, holdout hands it to the next segment as a matte (the segment itself never shows).
   if (context.segment->blendMode == 17 || context.segment->blendMode == 18) {
@@ -1138,6 +1140,9 @@ byte drawSpriteFrame(Segment &seg, SpriteState &state, const SpriteFrame &frame)
   context.useMask = seg.check1;
   context.useGradient = seg.check1 && seg.check2;
   context.useHorizontalGradient = seg.check3;
+  // Same inverse gamma WLED applies to segment opacity, so shade dims on the
+  // curve brightness always had.
+  context.shade = gammaCorrectCol ? gamma8inv(seg.custom2) : seg.custom2;
   context.moving = spriteUsesMovingLifecycle(seg, context.segmentWidth, state.maxWidth);
   if (context.moving) {
     updateMovingSpriteInstances(seg, state, context.segmentWidth, context.segmentHeight, state.maxWidth, state.maxHeight);

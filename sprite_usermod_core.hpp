@@ -144,6 +144,10 @@ struct SpriteRenderContext {
   bool useGradient;
   bool useHorizontalGradient;
   bool moving;
+  // Darkens RGB and leaves alpha alone, so a dimmed sprite stays opaque.
+  // Segment brightness is compositing opacity in this WLED, which would let
+  // the background show through instead.
+  uint8_t shade;
   const SpriteInstance *instances;
 };
 
@@ -203,18 +207,18 @@ static uint8_t starfieldEffectId = 255;
 static uint8_t windEffectId = 255;
 static uint8_t leavesEffectId = 255;
 
-static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Spawn jitter,,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=128";
+static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Spawn jitter,Shade,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=128,c2=255";
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
 static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Night depth,,,,Gradient;;!;2;sx=128,ix=160";
-static const char _data_FX_MODE_WIND[] PROGMEM = "Wind@Mean speed,Density,Flutter,Vertical drift,Streak length,Blow left;Particle A,Particle B,Particle C;!;2;sx=128,ix=90,c1=110,c2=150,c3=0";
+static const char _data_FX_MODE_WIND[] PROGMEM = "Wind@Mean speed,Density,Flutter/Swirls,Vertical drift,Streak length,Blow left,Fluid flow;Particle A,Particle B,Particle C;!;2;sx=128,ix=90,c1=110,c2=150,c3=0";
 
 void modeSpriteUsermod();
 void modePrecipitationUsermod();
 void modeDitheredGradientUsermod();
 void modeStarfieldUsermod();
 void modeWindUsermod();
-static const char _data_FX_MODE_LEAVES[] PROGMEM = "Leaves@Mean wind,Litter,Foliage,Gust wind,Autumn,Blow left,Tree shedding;Yellow,Red,Brown;!;2;sx=0,ix=32,c1=255,c2=0,c3=16";
+static const char _data_FX_MODE_LEAVES[] PROGMEM = "Leaves@Mean m/s x10,Litter,Foliage/Gustiness,Gust m/s x10,Autumn/Ground row,Blow left,Tree shedding;Yellow,Red,Brown;!;2;sx=0,ix=32,c1=0,c2=0,c3=0";
 void modeLeavesUsermod();
 void *spritePngOpen(const char *filename, int32_t *size);
 void spritePngClose(void *handle);

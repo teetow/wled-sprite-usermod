@@ -13,9 +13,10 @@
 // includes it against a stub Segment to step particle motion deterministically
 // on a host, with no ESP32 and no panel.
 
-#include "gust_field.hpp"
+#include "flow_field.hpp"
+#include "leaf_exchange.hpp"
 
-constexpr uint32_t WIND_STATE_MAGIC = 0x574E4434UL;
+constexpr uint32_t WIND_STATE_MAGIC = 0x574E4435UL;
 constexpr uint16_t WIND_MAX_PARTICLES = 128;
 constexpr uint8_t WIND_FP_SHIFT = 8;
 constexpr int16_t WIND_FP_SCALE = 1 << WIND_FP_SHIFT;
@@ -36,8 +37,12 @@ struct WindParticle {
   uint8_t phase;
   uint8_t seed;
   uint8_t state;
-  uint8_t reserved;
-} __attribute__((packed));
+  uint8_t landing; // picks the ground row where this leaf may settle as litter
+  float motionX, motionY;
+};
+// Naturally aligned with no padding; packing would only force byte-wise
+// access to the float members.
+static_assert(sizeof(WindParticle) == 24, "WindParticle layout changed");
 
 struct WindState {
   uint32_t magic;
@@ -52,6 +57,8 @@ struct WindState {
   uint16_t height;
   uint16_t particleCount;
   uint16_t activeTarget;
+  FlowField flow;
+  GustTuning tuning;
 };
 
 inline WindParticle *getWindParticles(WindState *state) {
@@ -105,7 +112,7 @@ bool ensureWindState(Segment &seg, WindState *&state) {
   if (!seg.allocateData(dataSize)) return false;
 
   state = reinterpret_cast<WindState *>(seg.data);
-  memset(state, 0, dataSize);
+  memset(seg.data, 0, dataSize);
   state->magic = WIND_STATE_MAGIC;
   state->lastUpdate = strip.now;
   state->prngState = 0x1B873593UL ^ (uint32_t(width) << 16) ^ uint32_t(height) ^ strip.now;
@@ -132,6 +139,8 @@ inline int32_t windDespawnMargin(const Segment &seg) {
 void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t gustSpeed,
                       uint8_t gustActivity);
 
+int16_t windBaseSpeed(uint8_t speed);
+
 void respawnWindParticle(WindState &state, WindParticle &particle, const Segment &seg, bool startUpwind) {
   const uint16_t width = max<uint16_t>(1, state.width);
   const uint16_t height = max<uint16_t>(1, state.height);
@@ -140,6 +149,7 @@ void respawnWindParticle(WindState &state, WindParticle &particle, const Segment
   particle.state = 1;
   particle.seed = uint8_t(windRandom(state, 255));
   particle.phase = uint8_t(windRandom(state, 255));
+  particle.landing = uint8_t(windRandom(state, 255));
 
   // Choose the most open of a few random positions. In rate mode, births still
   // enter just outside the upwind edge, but avoid stacking on leaves waiting
@@ -179,6 +189,8 @@ void respawnWindParticle(WindState &state, WindParticle &particle, const Segment
   particle.y = bestY;
 
   updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
+  particle.motionX = seg.check2 ? (seg.check1 ? -1 : 1) * windBaseSpeed(seg.speed) : particle.vx;
+  particle.motionY = seg.check2 ? 0 : particle.vy;
 }
 
 int16_t windBaseSpeed(uint8_t speed) {
@@ -263,12 +275,37 @@ void drawWindStreak(Segment &seg, const WindParticle &particle, int16_t headX, i
 
 void drawWindParticle(Segment &seg, const WindParticle &particle) {
   const int16_t headX = int16_t(particle.x >> WIND_FP_SHIFT);
-  const int16_t headY = int16_t((particle.y + windFlutterOffset(particle, seg)) >> WIND_FP_SHIFT);
+  const int16_t headY = int16_t((particle.y + (seg.check2 ? 0 : windFlutterOffset(particle, seg))) >> WIND_FP_SHIFT);
   const uint8_t depthAlpha = windDepthAlpha(particle.seed);
   const uint32_t color = windParticleColor(seg, particle.seed);
 
   drawWindStreak(seg, particle, headX, headY, color, depthAlpha);
   drawWindPixel(seg, headX, headY, color, depthAlpha);
+}
+
+// While ground Leaves runs, an airborne leaf coming down over the ground band
+// settles as litter once it reaches its own landing row, spreading landings
+// across depth. It lands only on an LED clear of existing litter and only
+// while the litter has room; otherwise it flies on and tries again.
+bool settleWindLeaf(WindParticle &particle, const Segment &seg) {
+  LeafExchange &exchange = leafExchange;
+  if (!leafExchangeAlive(exchange.groundSeen, exchange.groundSeenAt) || exchange.groundRoom == 0) return false;
+  const float vy = seg.check2 ? particle.motionY : particle.vy;
+  if (vy <= 0) return false;
+  const int rows = exchange.groundBottom - exchange.groundTop;
+  if (rows <= 0) return false;
+  const float x = float(particle.x) / WIND_FP_SCALE + seg.start;
+  const float y = float(particle.y) / WIND_FP_SCALE + seg.startY;
+  const int column = int(floorf(x + 0.5f)), row = int(floorf(y + 0.5f));
+  if (row < exchange.groundTop + particle.landing % rows || !groundLandingFree(column, row)) return false;
+  const float vx = seg.check2 ? particle.motionX : particle.vx;
+  if (!postLeafHandoff(exchange.toGround, column, row, vx, 0, particle.seed % 3)) return false;
+  exchange.groundRoom--;
+  exchange.landingsOffered++;
+  if (column >= 0 && column < int(LEAF_EXCHANGE_MAX_COLUMNS) && row < int(LEAF_EXCHANGE_MAX_ROWS))
+    exchange.groundLit[row] |= uint64_t(1) << column; // no second landing beside it this frame
+  particle.state = 0;
+  return true;
 }
 
 void updateWindParticle(WindState &state, WindParticle &particle, const Segment &seg, uint16_t index, uint16_t activeTarget, uint16_t deltaMs) {
@@ -283,13 +320,36 @@ void updateWindParticle(WindState &state, WindParticle &particle, const Segment 
     return;
   }
 
-  if (seg.speed == 0 && state.gustSpeed == 0) return;
+  if (!seg.check2 && seg.speed == 0 && state.gustSpeed == 0) return;
   // Existing particles respond to the shared front at their current column.
-  updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
+  if (seg.check2) {
+    const float fx = float(particle.x) / WIND_FP_SCALE / state.width * FLOW_WIDTH - 0.5f;
+    const float fy = float(particle.y) / WIND_FP_SCALE / state.height * FLOW_HEIGHT - 0.5f;
+    const float depth = (140 + (uint16_t(particle.seed) >> 1)) / 256.0f;
+    const float absoluteX = float(particle.x) / WIND_FP_SCALE + seg.start;
+    const float pulse = gustFieldStrength(absoluteX, strip.now, seg.check1, state.gustActivity, state.tuning);
+    const float responseMs = pulse > 0 ? state.tuning.responseMs : state.tuning.settleMs;
+    const float coupling = min(1.0f, deltaMs / responseMs * (0.8f + particle.seed / 640.0f));
+    const float kick = (windBaseSpeed(max(seg.speed, state.gustSpeed)) - windBaseSpeed(seg.speed)) * pulse;
+    const float airX = flowSample(state.flow.u, fx, fy) + (seg.check1 ? -kick : kick);
+    particle.motionX += (airX * depth - particle.motionX) * coupling;
+    const float drift = (int(seg.custom2) - 128) / 8.0f
+      * flowClamp((windBaseSpeed(seg.speed) + kick) / 12.0f, 0, 1);
+    particle.motionY += ((flowSample(state.flow.v, fx, fy) + drift) * depth - particle.motionY) * coupling;
+    particle.vx = int16_t(particle.motionX);
+    particle.vy = int16_t(particle.motionY);
+  } else updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
 
-  particle.x += (int32_t(particle.vx) * deltaMs * WIND_FP_SCALE) / 1000L;
-  particle.y += (int32_t(particle.vy) * deltaMs * WIND_FP_SCALE) / 1000L;
+  if (seg.check2) {
+    particle.x += int32_t(particle.motionX * deltaMs * WIND_FP_SCALE / 1000.0f);
+    particle.y += int32_t(particle.motionY * deltaMs * WIND_FP_SCALE / 1000.0f);
+  } else {
+    particle.x += (int32_t(particle.vx) * deltaMs * WIND_FP_SCALE) / 1000L;
+    particle.y += (int32_t(particle.vy) * deltaMs * WIND_FP_SCALE) / 1000L;
+  }
   particle.phase = uint8_t(particle.phase + windFlutterStep(particle, seg, deltaMs));
+
+  if (settleWindLeaf(particle, seg)) return;
 
   // Recycle at the upwind edge once a particle leaves the segment on either axis.
   const int32_t margin = windDespawnMargin(seg);
@@ -324,8 +384,60 @@ void spawnTimedWind(WindState &state, const Segment &seg, int16_t rateTenths, ui
   // If the pool is full, drop this birth; never accumulate a catch-up burst.
 }
 
+// meanTenths/gustTenths are physical m/s x10 from the host. Negative values
+// fall back to inverting Neoblaster's default sx scale (4 m/s = 70, 17 = 255).
+// Kept out of line: inlined into renderWindToSegment, this float code trips an
+// internal compiler error in the ESP32 toolchain (Xtensa GCC 8.4, postreload).
+__attribute__((noinline)) void advanceWindFlow(WindState &state, const Segment &seg, uint16_t deltaMs,
+                                               uint8_t gustSpeed, uint8_t gustActivity, const GustTuning &tuning,
+                                               int16_t meanTenths, int16_t gustTenths) {
+  const auto physicalWind = [](uint8_t control) {
+    return control < 70 ? control * (4.0f / 70) : 4.0f + (control - 70) * (13.0f / 185);
+  };
+  const float meanMps = meanTenths >= 0 ? meanTenths / 10.0f : physicalWind(seg.speed);
+  const float gustMps = gustTenths >= 0 ? max(meanMps, gustTenths / 10.0f)
+    : physicalWind(max(seg.speed, gustSpeed));
+  state.flow.accumulator += deltaMs / 1000.0f;
+  while (state.flow.accumulator >= FLOW_STEP_SECONDS) {
+    state.flow.accumulator -= FLOW_STEP_SECONDS;
+    stepGroundFlow(state.flow, state.width, meanMps, gustMps,
+      gustActivity, seg.check1, seg.start, strip.now - uint32_t(state.flow.accumulator * 1000),
+      state.height, windBaseSpeed(seg.speed), 0.35f + seg.custom1 / 128.0f, tuning);
+  }
+}
+
+// A ground leaf lifted clear of the horizon continues here as an airborne
+// particle at the same LED, with its own palette color and near-full opacity.
+void adoptLiftedLeaves(WindState &state, const Segment &seg) {
+  WindParticle *particles = getWindParticles(&state);
+  for (LeafHandoff &handoff : leafExchange.toAir) {
+    const bool live = leafHandoffLive(handoff);
+    handoff.pending = false;
+    if (!live) continue;
+    for (uint16_t i = 0; i < state.activeTarget; i++) {
+      WindParticle &particle = particles[i];
+      if (particle.state != 0) continue;
+      particle = {};
+      particle.x = int32_t((handoff.x - seg.start) * WIND_FP_SCALE);
+      particle.y = int32_t((handoff.y - seg.startY) * WIND_FP_SCALE);
+      particle.seed = uint8_t(249 + handoff.color % 3); // seed % 3 picks the color; 249..251 is near-opaque
+      particle.phase = uint8_t(windRandom(state, 255));
+      particle.landing = uint8_t(windRandom(state, 255));
+      particle.motionX = handoff.vx;
+      particle.motionY = handoff.vy;
+      particle.vx = int16_t(handoff.vx);
+      particle.vy = int16_t(handoff.vy);
+      particle.state = 1;
+      leafExchange.liftsTaken++;
+      break;
+    }
+  }
+}
+
+// meanTenths/gustTenths are physical m/s x10 from the host; see advanceWindFlow.
 void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0,
-                         int16_t spawnRateTenths = -1, uint8_t gustActivity = 0) {
+                         int16_t spawnRateTenths = -1, uint8_t gustActivity = 0, const GustTuning &tuning = DEFAULT_GUST_TUNING,
+                         int16_t meanTenths = -1, int16_t gustTenths = -1) {
   WindState *state = nullptr;
   if (!ensureWindState(seg, state) || !state) {
     seg.fill(BLACK);
@@ -342,16 +454,24 @@ void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0,
   state->timedSpawning = timed;
   state->gustSpeed = gustSpeed;
   state->gustActivity = gustActivity;
+  state->tuning = tuning;
   state->activeTarget = timed && seg.intensity > 0
     ? state->particleCount : getWindActiveTarget(seg, state->particleCount);
 
+  if (seg.check2) advanceWindFlow(*state, seg, deltaMs, gustSpeed, gustActivity, tuning, meanTenths, gustTenths);
+  adoptLiftedLeaves(*state, seg);
   seg.fill(BLACK);
   WindParticle *particles = getWindParticles(state);
   for (uint16_t index = 0; index < state->particleCount; index++) {
     updateWindParticle(*state, particles[index], seg, index, state->activeTarget, deltaMs);
   }
   if (timed) spawnTimedWind(*state, seg, spawnRateTenths, deltaMs);
+  unsigned room = 0;
   for (uint16_t index = 0; index < state->particleCount; index++) {
     if (particles[index].state != 0) drawWindParticle(seg, particles[index]);
+    else room += index < state->activeTarget;
   }
+  leafExchange.airSeen = true;
+  leafExchange.airSeenAt = strip.now;
+  leafExchange.airRoom = uint8_t(min(255U, room));
 }

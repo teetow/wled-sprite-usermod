@@ -80,6 +80,7 @@ class Segment {
   uint16_t vHeight() const { return _height; }
 
   uint16_t start = 0;
+  uint16_t startY = 0;
 
   uint8_t speed = 128;
   uint8_t intensity = 128;

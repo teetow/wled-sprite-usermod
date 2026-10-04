@@ -100,6 +100,7 @@ render.
 | Speed        | `Move speed`    | Horizontal movement speed. `0` keeps sprites stationary. Values above `0` map to roughly 1 to 128 pixels per second. Moving sprites make one full off-screen-to-off-screen traversal, draw with horizontal subpixel antialiasing, then respawn. |
 | Intensity    | `Instances`     | Number of sprite instances. Low values keep one sprite. Higher values increase the moving spawn pool or stationary layout count up to the maximum that fits the segment and sprite size. |
 | Custom 1     | `Spawn jitter`  | Randomizes moving sprite spawn timing and row. For animations, it also randomizes the starting frame. `0` removes extra spawn delay/frame offset; `255` uses the widest jitter window. |
+| Custom 2     | `Shade`               | Darkens the sprite's RGB, keeping its alpha. `255` (default) is unchanged. Use this to dim a sprite: segment brightness is compositing opacity in WLED 16, so lowering it makes the sprite see-through. |
 | Check 1      | `Mask`                | Ignores the PNG RGB colors and uses sprite alpha as a stencil over the segment's primary color.                                                                 |
 | Check 2      | `Gradient`            | Only applies when `Mask` is enabled. Fills masked pixels from the active palette instead of a flat primary color.                                               |
 | Check 3      | `Horizontal Gradient` | Only applies when `Gradient` is enabled. Uses a horizontal palette axis instead of a vertical one.                                                              |
@@ -143,10 +144,11 @@ leave the segment on either axis re-enter at the upwind edge.
 | Color 1..3   | `Particle A/B/C` | The three particle colors. Each particle owns one of them. Leave B and C black for a uniform field.                   |
 | Speed        | `Mean speed`     | Horizontal travel speed, roughly 3 px/s at `1` and 60 px/s at `255`. `0` leaves only gust motion.                           |
 | Intensity    | `Density`        | Active particle count. `0` disables particles; `1` is a single-particle trickle.                                                                       |
-| Custom 1     | `Flutter`        | Vertical sine wobble. `128` is roughly ±1 px, `255` roughly ±2 px. `0` makes particles slide flat.                    |
+| Custom 1     | `Flutter/Swirls` | In fluid mode, strength of rotational forcing. In standalone mode, vertical sine wobble. `128` is roughly ±1 px, `255` roughly ±2 px. `0` makes particles slide flat.                    |
 | Custom 2     | `Vertical drift` | `128` is level flight; above it particles settle as they cross, below it they lift. ±16 px/s at the extremes.         |
 | Custom 3     | `Streak length`  | Trailing pixels behind each particle, drawn straight upwind. `0` (bare particles) suits leaves; 2-3 suits spindrift.  |
-| Check 1      | `Blow left`      | Reverses travel. Off blows right.                                                                                    |
+| Check 1      | `Blow left`      | Reverses travel. Off blows right. |
+| Check 2 | `Fluid flow` | Enables the evolving fluid field; off retains standalone sine flutter. |
 
 An optional `wind_gust` JSON field on each segment sets the gust ceiling
 (0–255, same scale as `sx`). For example, `{"seg":[{"id":8,"sx":100,"wind_gust":220,"ix":15}]}`
@@ -154,8 +156,9 @@ gives sparse particles with speeds ranging from mean wind to the gust ceiling.
 Zero, missing on effect selection, or a ceiling below `sx` gives steady mean
 wind. With a positive gust ceiling, `sx=0` allows particles to wait motionless
 between fronts. Partial updates without `wind_gust` preserve the current ceiling.
-The optional `wind_gust_activity` byte (0–255) opens a second, shorter front
-during the lull. It changes duration without weakening the crest. Neoblaster
+The optional `wind_gust_activity` byte (0–255) controls synthesized cadence
+and roughness: weak gusts are rare and brief; stronger values produce more
+frequent, irregular surges with sharper attacks and uneven kicks. Neoblaster
 sends the same value to airborne Wind and ground Leaves; a full effect selection
 without it defaults to zero.
 
@@ -170,19 +173,59 @@ Wind's original intensity-driven population. In rate mode, nonzero `ix` enables
 the particle pool; its value does not set the live count. Neoblaster uses `ix:1`
 so ordinary preset restores remain sparse before it reapplies the rate.
 
-Each flying particle samples a shared gust field at its current absolute panel
-column every frame. Each front rises quickly, holds a short, nearly flat peak,
-then eases off into a long lull. Non-harmonic waves bend the timing, while peak
-strength stays between 90% and 100% of the gust ceiling. Increasing activity
-adds a second full-strength crest between the regular fronts. Fronts travel
-downwind at about 10 pixels per second.
-Ground Leaves samples the same field, so leaves at a given column receive the
-same gust strength. Existing airborne particles accelerate and slow; depth
-still makes distant particles slower and dimmer. The direction checkbox
-reverses both their travel and the front.
+Ground and airborne motion share a clock-derived gust schedule at absolute
+panel columns. Weak gusts are brief and rare; stronger gustiness brings more
+frequent, irregular surges with quick attacks and uneven kicks. Fronts travel
+downwind at 10 pixels/s; reversing the bearing reverses the front. Gustiness
+is derived from both absolute peak speed and excess over sustained wind.
+
+Both effects accept a per-segment `wind_gust_tuning` object. Its integer fields
+and defaults, the tuned nominal look, are `spacing_pct:125`, `duration_pct:25`,
+`attack_ms:20`, `roughness_pct:100`, `response_ms:470`, and `settle_ms:50`.
+Spacing and duration scale the synthesized schedule; attack controls the
+front's rise time; roughness controls uneven kicks. Response and settling
+control how quickly particles follow a gust and return to the sustained
+baseline; they do not touch the fluid grid, which relaxes on its own ~0.5 s
+time constant. Missing fields retain their current values on partial updates;
+a full effect selection without the object restores defaults. Neoblaster sends
+the same tuning to both layers: spacing, duration and roughness from three
+autosaving editor sliders, and attack, response and settling fixed at the
+defaults.
+
+**Leaf hand-off.** While ground Leaves and Wind both run, they exchange leaves
+through a small buffer in this usermod (`leaf_exchange.hpp`). A ground leaf
+rising more than two rows clear of the horizon continues as an airborne Wind
+particle at the same LED, color and speed. An airborne particle coming down
+over the ground band settles as litter once it reaches its own randomly chosen
+landing row, on an LED clear of existing litter, keeping its color and
+horizontal momentum. Each side publishes a heartbeat and its free room, so a
+hand-off is only offered to a running effect with space, and nothing vanishes
+in transit. Neoblaster gives autumn Wind particles the litter's colors and
+brightness, so the two layers read as one population. `/json/info.sprite_usermod`
+reports running totals as `leaf_lifts` and `leaf_landings`.
+
+The `Fluid flow` checkbox (`o2`) enables a 16×8 incompressible fluid solver for
+Wind: self-advection, viscosity, pressure projection and vorticity confinement.
+Particles respond with inertia to the sampled flow rather than following
+independent sine paths. Gust fronts add a local stream after pressure projection
+so brief bursts retain their sharp acceleration. Vertical drift scales with
+local wind and falls silent in gust-only lulls; Custom 1 adjusts swirl
+strength in fluid mode and sine flutter when Fluid flow is disabled. Neoblaster enables
+Fluid flow. Three swirl sources feed the grid; each lives about 8 seconds,
+appears at a fresh spot, drifts downwind with the mean flow and fades out, so
+eddies never pin to fixed columns. Gusts feed them harder.
+
+The optional `wind_mps10` field (`[mean, gust]`, physical m/s ×10, 0–255) gives
+the Wind solver the real wind speeds that drive its turbulence. Without it, for
+example after a preset restore, the effect estimates them by inverting
+Neoblaster's default speed scale (4 m/s at `sx` 70, 17 m/s at 255).
+
+Each solver uses about 3 KB; `/json/info.sprite_usermod` reports `flow_grid`,
+plus `wind_us`/`wind_max_us` and `leaves_us`/`leaves_max_us` (whole-effect
+render time, ground Leaves only) for device performance checks.
 
 WLED's usermod state hook runs before it serializes segments, so `/json/state`
-reports top-level `wind_gust`, `wind_gust_activity`, and `wind_spawn_rate`
+reports top-level `wind_gust`, `wind_gust_activity`, `wind_gust_tuning`, `wind_mps10`, and `wind_spawn_rate`
 arrays indexed by segment id.
 A rate of `-1` denotes the legacy population mode.
 Neoblaster merges those into the corresponding live segments. Controls follow
@@ -211,34 +254,57 @@ blending (17). Neoblaster owns calendar activation, snow suppression and colors.
 | Control | Meaning |
 | --- | --- |
 | Color 1–3 | Tree autumn palette: yellow, red, brown |
-| Speed | Mean ground motion, 0–255; quadratic speed scale, up to 60 px/s; zero allows motion from gusts alone |
+| Speed | Sustained physical wind in tenths of m/s: 40 means 4 m/s, 150 means 15 m/s |
 | Intensity | Ground density, up to one leaf per eight pixels, capped at 32; shedding mode uses it as opacity |
 | Custom 1 | Shedding: remaining tree foliage, 0–255. Ground: shared gust activity, 0–255 |
-| Custom 2 | Gust ceiling, same quadratic scale as Speed |
-| Custom 3 | Tree autumn progress, 0–31 |
+| Custom 2 | Ground: physical gust peak in tenths of m/s. Shedding: seasonal taper, 0 at peak through 255 to stop births |
+| Custom 3 | Ground: horizon row within the segment (reserve rows above for lift). Shedding: autumn progress, 0–31 |
 | Check 1 | Blow left |
 | Check 2 | Tree shedding instead of ground litter |
 
 Shedding uses one or two independent sources from Neoblaster's present, turned
 canopy cells. Each fades in on the tree for 10 seconds, falls with gravity to
 the ground in 2 seconds, fades out there for 10 seconds, then waits 12–22
-seconds before choosing a new source. A second source starts at a different
+seconds before choosing a new source at peak seasonal activity. Custom 2
+stretches that quiet interval so the full cycle rate declines with the season,
+while fade and fall durations remain fixed. A second source starts at a different
 time and prefers a separate canopy column. At most two leaves are airborne at once.
 Tree-fallen leaves stay in their source column while falling and after landing,
 regardless of wind controls; the separate ground-litter segment handles wind.
-Ground litter chooses open positions with a best-candidate sampler and fades in
-over 15 seconds. Its seasonal density persists, but a leaf blown off the panel
-is replaced near the upwind edge with a new row and color instead of replaying
-the same lap. Sparse leaves avoid sharing a column across rows; wind-driven
-leaves gently separate if a front presses them together. Calm leaves stay fixed.
-Mean wind moves grounded leaves continuously;
-gusts add bursts, and gust-only wind leaves them still between peaks. Exact
-calm keeps them fixed. Neoblaster derives both mean and gust speed from the
-whole-panel Wind particles, with ground friction decreasing as wind rises;
-ground and airborne speeds meet around 17 m/s. All leaves occupy one pixel,
-even while falling. The
-fixed particle state uses under
-1 KB per segment. All controls are ordinary WLED segment fields.
+Ground litter starts in open positions at half opacity and reaches full
+strength in 2 seconds; it never draws below half opacity, so no particle is
+wasted as a faint smudge. Neoblaster also lightens any tree color within 3:1
+contrast of the ground (judged at daytime brightness) before sending it. Density
+is based on ground area only, excluding the reserved sky. Each leaf has a
+world position, depth, velocity, drag, static friction and separate lift height.
+Perspective projects near leaves three times faster than distant ones; movement
+through depth changes both screen row and scale. Leaves occupy one LED each.
+Spacing is a hard rule: no two visible leaves ever share or touch an LED,
+diagonals included, so litter can never draw a solid streak. Every placement
+and every move is checked. A blocked leaf glances off one row in depth or
+stops short; a resting leaf is never pushed by a neighbour, and an airborne
+leaf with nowhere to land drifts sideways until a gap opens. Before contact,
+moving leaves steer around neighbours within 3.5 LEDs, and each leaf carries
+its own flutter, small-scale turbulence the 16×8 grid cannot resolve, so
+neighbours do not travel in lockstep convoys. Depth flutter is sized in screen
+rows, and the band's top and bottom edges reflect leaves and push back gently,
+so litter spreads evenly across rows instead of lining the horizon. Moving
+litter keeps a Clark–Evans ratio of about 1.25–1.55 (1.0 is uniform random).
+
+Nothing wraps: a leaf blown off the panel is gone. A different leaf arrives
+0.5–4 seconds later. Once wind can move litter (mean or gust of at least 3 m/s),
+about two thirds of arrivals blow in from the upwind edge, on the free entry
+row farthest from nearby litter; the rest, and every arrival in calm air, fade
+in at an open spot. Strong wind thins the visible litter somewhat: around 14 of
+24 leaves at 8 m/s, 10 in a 15 m/s gale.
+
+The evolving fluid field supplies local curved flow. At 1/2 m/s most leaves
+rest, 3–4 m/s brings noticeable skittering, 5–8 m/s escalates sustained motion,
+and stronger winds increase transport and lift. Local gust wind crossing
+8–10 m/s permits lift in rotating patches; gravity brings leaves back down.
+Lift uses a modeled updraft derived from the 2D flow, not a full 3D air solver.
+Momentum and eddies decay after a gust or return to calm. Ground state uses
+under 5 KB per segment. Shedding retains its canopy lifecycle and ignores wind.
 
 The canopy template and coordinate hash in `leaves_effect.hpp` mirror
 Neoblaster's `src/tree.ts`; update both if the tree silhouette changes.
