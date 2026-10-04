@@ -172,6 +172,7 @@ static uint8_t ditheredGradientEffectId = 255;
 static uint8_t starfieldEffectId = 255;
 static uint8_t windEffectId = 255;
 static uint8_t leavesEffectId = 255;
+static uint8_t cloudDeckEffectId = 255;
 
 static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Spawn jitter,Shade,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=128,c2=255";
 static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length,Snow;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
@@ -186,6 +187,8 @@ void modeStarfieldUsermod();
 void modeWindUsermod();
 static const char _data_FX_MODE_LEAVES[] PROGMEM = "Leaves@Mean m/s x10,Litter,Foliage/Gustiness,Gust m/s x10,Autumn/Ground row,Blow left,Tree shedding;Yellow,Red,Brown;!;2;sx=0,ix=32,c1=0,c2=0,c3=0";
 void modeLeavesUsermod();
+static const char _data_FX_MODE_CLOUD_DECK[] PROGMEM = "Cloud Deck@Drift,Coverage,Thickness,,,Blow left;Lit,Core,;!;2;sx=0,ix=128,c1=128";
+void modeCloudDeckUsermod();
 void *spritePngOpen(const char *filename, int32_t *size);
 void spritePngClose(void *handle);
 int32_t spritePngRead(PNGFILE *handle, uint8_t *buffer, int32_t length);

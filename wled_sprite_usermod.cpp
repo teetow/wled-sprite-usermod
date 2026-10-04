@@ -18,6 +18,7 @@ static uint32_t windDrawUs = 0, windMaxDrawUs = 0, leavesDrawUs = 0, leavesMaxDr
 #include "starfield_effect.hpp"
 #include "wind_effect.hpp"
 #include "leaves_effect.hpp"
+#include "cloud_deck_effect.hpp"
 
 // Wind's own spawn rate, per segment. Stored outside effect data so resizing
 // preserves it. Everything about the air itself is panel-wide: see panel_wind.hpp.
@@ -138,6 +139,7 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("starfield_fxid")] = starfieldEffectId;
   spriteInfo[F("wind_fxid")] = windEffectId;
   spriteInfo[F("leaves_fxid")] = leavesEffectId;
+  spriteInfo[F("cloud_deck_fxid")] = cloudDeckEffectId;
   spriteInfo[F("mode")] = F("cache");
   spriteInfo[F("cache_generation")] = spriteCacheGeneration;
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
@@ -190,6 +192,7 @@ void registerEffect() {
   if (starfieldEffectId == 255) starfieldEffectId = strip.addEffect(255, &modeStarfieldUsermod, _data_FX_MODE_STARFIELD);
   if (windEffectId == 255) windEffectId = strip.addEffect(255, &modeWindUsermod, _data_FX_MODE_WIND);
   if (leavesEffectId == 255) leavesEffectId = strip.addEffect(255, &modeLeavesUsermod, _data_FX_MODE_LEAVES);
+  if (cloudDeckEffectId == 255) cloudDeckEffectId = strip.addEffect(255, &modeCloudDeckUsermod, _data_FX_MODE_CLOUD_DECK);
 }
 
 void modeSpriteUsermod() {
@@ -250,6 +253,15 @@ void modeLeavesUsermod() {
     leavesDrawUs = micros() - start;
     leavesMaxDrawUs = max(leavesMaxDrawUs, leavesDrawUs);
   }
+}
+
+void modeCloudDeckUsermod() {
+  if (!strip.isMatrix || !SEGMENT.is2D()) {
+    SEGMENT.fill(BLACK);
+    return;
+  }
+  const WindInputs wind = panelWindInputs();
+  renderCloudDeckToSegment(SEGMENT, panelWind.valid ? &wind : nullptr);
 }
 
 } // namespace sprite_usermod

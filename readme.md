@@ -13,6 +13,9 @@
   head/trail gradient.
 - `Leaves` keeps persistent litter on the ground and optionally sheds sparse
   leaves from Neoblaster's tree canopy, with long fades after landing.
+- `Cloud Deck` draws the sky's cloud layer: a soft procedural deck whose
+  coverage opens or closes its gaps, in front of the sun, moon and stars and
+  behind the cloud sprites.
 
 ## Supported targets
 
@@ -331,6 +334,26 @@ Neoblaster's `src/tree.ts`; update both if the tree silhouette changes.
 `test/leaves_harness.cpp` exercises the shipped effect with a deterministic clock.
 Discovery reports `info.sprite_usermod.leaves_fxid`.
 
+## Cloud Deck controls
+
+| WLED control | Label in UI | Description |
+| ------------ | ----------- | ----------- |
+| Color 1      | `Lit`       | Thin, lit cloud. |
+| Color 2      | `Core`      | The thickest cores. |
+| Speed        | `Drift`     | Drift at Speed/32 px/s, used only while `panel_wind` is not set. |
+| Intensity    | `Coverage`  | Share of the segment under cloud: `0` is clear, `255` closed. |
+| Custom 1     | `Thickness` | How opaque the cloud is. A thin deck lets the sun show through as a pale disc; a thick one hides it. |
+| Check 1      | `Blow left` | Drift direction, used only while `panel_wind` is not set. |
+
+The deck is two octaves of value noise, wide and flat (about 11 by 3.5 LEDs per
+feature), flattening and thickening toward the bottom row as a layer seen
+edge-on would. Coverage maps through the field's measured distribution, so
+`ix` is the share of sky actually covered, not an opacity; a closed deck keeps
+its texture, shading from thin to thick. It drifts at 0.25 px/s per m/s of
+`panel_wind` and reshapes slowly in still air. Draw it alpha-over (`bm` 17),
+after the sun, moon and stars, so they are hidden by cloud rather than faded.
+Discovery reports `info.sprite_usermod.cloud_deck_fxid`.
+
 ## Starfield controls
 
 `Starfield` paints procedural twinkling stars over the segment, recreating the
@@ -425,6 +448,11 @@ This is where physics belongs. It has already earned itself: it caught a spawn
 margin that reached further outside the segment than the despawn margin, so a
 recycled particle was re-rolled every frame — visible on a panel only as a faint
 flicker at the entry edge, and invisible in a still capture.
+
+`flow_harness`, `leaves_harness`, `exchange_harness`, `precip_harness` and
+`cloud_deck_harness` cover the fluid field, ground leaves, the leaf hand-off,
+precipitation riding the panel air, and the cloud deck's coverage, texture and
+drift.
 
 Requires only `g++`; there is no PlatformIO or toolchain dependency.
 
