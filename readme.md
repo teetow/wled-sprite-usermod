@@ -115,8 +115,9 @@ render.
 | Speed        | `Fall speed`    | Downward particle speed. `0` freezes the particles in place.                                                            |
 | Intensity    | `Density`       | Active particle density. `0` disables particles; higher values increase the active particle count.                       |
 | Custom 1     | `Bounciness`    | Splash droplet peak height. `0` disables splashes entirely (drops just despawn — good for snow). Higher values jump higher and read more like hail; capped so peak height stays within ~5 pixels regardless of slider position. |
-| Custom 2     | `Shear`         | Horizontal travel / wind angle. The midpoint is vertical fall; lower and higher values push particles left or right.     |
+| Custom 2     | `Shear`         | Horizontal travel / wind angle. The midpoint is vertical fall; lower and higher values push particles left or right. Ignored while `panel_wind` is set. |
 | Custom 3     | `Trail length`  | Trail length in pixels. WLED stores this slider at reduced 0-31 resolution, so the maximum trail is roughly 31 pixels.   |
+| Check 1      | `Snow`          | Light particles: they lag gusts and ride updrafts. Off is rain or hail, which follows the air almost at once.            |
 
 Suggested starting points:
 
@@ -130,6 +131,15 @@ Suggested starting points:
 Setting `Trail end` to solid black makes the trail fade to fully transparent
 (alpha is what fades — the tail does not darken the background). For a tail
 that actually fades toward a color, pick any non-black value.
+
+**Riding the panel air.** While `panel_wind` is set (see the Wind section),
+drops ignore `Shear` and ride the shared air field instead: each steers its
+horizontal speed toward half the local on-panel air speed, gust fronts and
+eddies included, so rain leans harder as a gust passes and straightens in a
+lull. Rain catches up in about 0.08 s. Snow takes about 0.45 s, and also
+rides vertical air: an updraft slows a flake to as little as a quarter of its
+fall speed, but never lifts it. Precipitation advances the air itself when no
+Wind segment is running.
 
 ## Wind controls
 

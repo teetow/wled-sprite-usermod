@@ -12,19 +12,6 @@ constexpr int32_t SPRITE_SUBPIXEL_SCALE = 1 << SPRITE_SUBPIXEL_SHIFT;
 constexpr size_t SPRITE_CACHE_BUDGET = (MAX_SEGMENT_DATA > (12 * 1024)) ? (12 * 1024) : MAX_SEGMENT_DATA;
 constexpr uint8_t SPRITE_SHARED_CACHE_SLOTS = 4;
 constexpr size_t SPRITE_SHARED_CACHE_BUDGET = SPRITE_CACHE_BUDGET;
-constexpr uint32_t PRECIPITATION_STATE_MAGIC = 0x50524351UL;
-constexpr uint16_t PRECIPITATION_MAX_PARTICLES = 192;
-constexpr uint8_t PRECIPITATION_FP_SHIFT = 8;
-constexpr int16_t PRECIPITATION_FP_SCALE = 1 << PRECIPITATION_FP_SHIFT;
-constexpr uint8_t PRECIPITATION_SPLASH_TIME_SHIFT = 3;
-constexpr uint8_t PRECIPITATION_SPLASH_TIME_SCALE = 1 << PRECIPITATION_SPLASH_TIME_SHIFT;
-constexpr uint16_t PRECIPITATION_SPLASH_FRAME_MS = 1000 / 30;
-constexpr uint8_t PRECIPITATION_REFERENCE_FALL = 34;
-// Damps splash temporal evolution relative to fall speed. Splash still
-// scales with sx (Fall speed), but advances at 1/N of the rate the same
-// fall speed would push a falling particle. 2 → splash plays out at half
-// speed, keeps the visual a beat longer without bloating active particles.
-constexpr uint8_t PRECIPITATION_SPLASH_RATE_DIVIDER = 2;
 constexpr float DITHERED_GRADIENT_TWO_PI = 6.28318530718f;
 constexpr float STARFIELD_DEFAULT_RATE = 1.6f;
 constexpr float STARFIELD_MIN_FADE = 0.18f;
@@ -158,27 +145,6 @@ struct SpriteCacheLoadContext {
   bool flipX;
 };
 
-struct PrecipitationParticle {
-  int32_t x;
-  int32_t y;
-  int16_t vx;
-  int16_t vy;
-  uint8_t state;
-  uint8_t age;
-  uint8_t ttl;
-  uint8_t seed;
-} __attribute__((packed));
-
-struct PrecipitationState {
-  uint32_t magic;
-  uint32_t lastUpdate;
-  uint32_t prngState;
-  uint16_t width;
-  uint16_t height;
-  uint16_t particleCount;
-  uint16_t activeTarget;
-};
-
 class SpritePrng {
   public:
     explicit SpritePrng(uint32_t seed) : _state(seed ? seed : 0x9E3779B9UL) {}
@@ -208,7 +174,7 @@ static uint8_t windEffectId = 255;
 static uint8_t leavesEffectId = 255;
 
 static const char _data_FX_MODE_SPRITE[] PROGMEM = "Sprite@Move speed,Instances,Spawn jitter,Shade,,Mask,Gradient,Horizontal Gradient;;!;2;sx=0,ix=0,c1=128,c2=255";
-static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
+static const char _data_FX_MODE_PRECIPITATION[] PROGMEM = "Precipitation@Fall speed,Density,Bounciness,Shear,Trail length,Snow;Particle,Trail start,Trail end;!;2;sx=128,ix=128,c1=128,c2=128,c3=10";
 static const char _data_FX_MODE_DITHERED_GRADIENT[] PROGMEM = "DitheredGradient@Dither,Rotation;;!;2;sx=0,ix=0";
 static const char _data_FX_MODE_STARFIELD[] PROGMEM = "Starfield@Twinkle speed,Night depth,,,,Gradient;;!;2;sx=128,ix=160";
 static const char _data_FX_MODE_WIND[] PROGMEM = "Wind@Mean speed,Density,Flutter/Swirls,Vertical drift,Streak length,Blow left,Fluid flow;Particle A,Particle B,Particle C;!;2;sx=128,ix=90,c1=110,c2=150,c3=0";
@@ -262,6 +228,3 @@ inline const uint8_t *getSpritePixelBlob(const SpriteState *state) {
   return reinterpret_cast<const uint8_t *>(state) + state->pixelDataOffset;
 }
 
-inline PrecipitationParticle *getPrecipitationParticles(PrecipitationState *state) {
-  return reinterpret_cast<PrecipitationParticle *>(state + 1);
-}

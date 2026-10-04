@@ -96,3 +96,13 @@ __attribute__((noinline)) inline void advancePanelAir(const WindInputs &wind) {
 // Panel pixel to air-grid coordinates, for flowSample.
 inline float airGridX(float panelX) { return panelX / max<uint16_t>(1, Segment::maxWidth) * FLOW_WIDTH - 0.5f; }
 inline float airGridY(float panelY) { return panelY / max<uint16_t>(1, Segment::maxHeight) * FLOW_HEIGHT - 0.5f; }
+
+// The panel air at a panel pixel, in on-panel px/s: the resolved flow plus the
+// gust front passing that column, as the Wind particles feel it.
+inline void samplePanelAir(const WindInputs &wind, float x, float y, float &airX, float &airY) {
+  const float pulse = gustFieldStrength(x, strip.now, wind.blowLeft, wind.activity, wind.tuning);
+  const float kick = (windBaseSpeed(wind.airGust) - windBaseSpeed(wind.airMean)) * pulse;
+  const float fx = airGridX(x), fy = airGridY(y);
+  airX = flowSample(airField.flow.u, fx, fy) + (wind.blowLeft ? -kick : kick);
+  airY = flowSample(airField.flow.v, fx, fy);
+}

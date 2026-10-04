@@ -206,7 +206,8 @@ void modePrecipitationUsermod() {
     SEGMENT.fill(SEGCOLOR(0));
     return;
   }
-  renderPrecipitationToSegment(SEGMENT);
+  const WindInputs wind = panelWindInputs();
+  renderPrecipitationToSegment(SEGMENT, panelWind.valid ? &wind : nullptr);
 }
 
 void modeDitheredGradientUsermod() {

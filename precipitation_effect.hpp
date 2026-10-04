@@ -1,4 +1,63 @@
 // Included from wled_sprite_usermod.cpp inside namespace sprite_usermod.
+//
+// Constants, particle state and the state accessor live here rather than in
+// sprite_usermod_core.hpp so this file compiles on its own: test/precip_harness.cpp
+// steps it against a stub Segment on a host.
+
+#include "panel_wind.hpp"
+
+constexpr uint32_t PRECIPITATION_STATE_MAGIC = 0x50524352UL;
+constexpr uint16_t PRECIPITATION_MAX_PARTICLES = 192;
+constexpr uint8_t PRECIPITATION_FP_SHIFT = 8;
+constexpr int16_t PRECIPITATION_FP_SCALE = 1 << PRECIPITATION_FP_SHIFT;
+constexpr uint8_t PRECIPITATION_SPLASH_TIME_SHIFT = 3;
+constexpr uint8_t PRECIPITATION_SPLASH_TIME_SCALE = 1 << PRECIPITATION_SPLASH_TIME_SHIFT;
+constexpr uint16_t PRECIPITATION_SPLASH_FRAME_MS = 1000 / 30;
+constexpr uint8_t PRECIPITATION_REFERENCE_FALL = 34;
+// Damps splash temporal evolution relative to fall speed. Splash still
+// scales with sx (Fall speed), but advances at 1/N of the rate the same
+// fall speed would push a falling particle. 2 → splash plays out at half
+// speed, keeps the visual a beat longer without bloating active particles.
+constexpr uint8_t PRECIPITATION_SPLASH_RATE_DIVIDER = 2;
+// Riding the panel air. Drops take this share of the air's on-panel speed,
+// which keeps the mean-wind slant close to the fixed shear Neoblaster used to
+// send. Rain is heavy and catches up with the air almost at once; snow is
+// light, lags gusts, and also rides vertical air, so updrafts slow a flake or
+// hold it up. A flake never rises: it keeps at least this share of its fall.
+constexpr float PRECIPITATION_AIR_SHARE = 0.5f;
+constexpr float PRECIPITATION_RAIN_RESPONSE_S = 0.08f;
+constexpr float PRECIPITATION_SNOW_RESPONSE_S = 0.45f;
+constexpr float PRECIPITATION_SNOW_LIFT = 0.6f;
+constexpr float PRECIPITATION_SNOW_MIN_FALL = 0.25f;
+
+struct PrecipitationParticle {
+  int32_t x;
+  int32_t y;
+  int16_t vx;    // px/s, for drawing
+  int16_t vy;
+  int16_t airVx; // px/s x16: the velocity a drop has picked up from the air
+  int16_t airVy;
+  uint8_t state;
+  uint8_t age;
+  uint8_t ttl;
+  uint8_t seed;
+} __attribute__((packed));
+
+struct PrecipitationState {
+  uint32_t magic;
+  uint32_t lastUpdate;
+  uint32_t prngState;
+  uint16_t width;
+  uint16_t height;
+  uint16_t particleCount;
+  uint16_t activeTarget;
+  const WindInputs *wind; // this frame's panel wind, or null for fixed shear
+};
+
+inline PrecipitationParticle *getPrecipitationParticles(PrecipitationState *state) {
+  return reinterpret_cast<PrecipitationParticle *>(state + 1);
+}
+
 
 uint16_t precipitationRandom(PrecipitationState &state, uint16_t upperExclusive) {
   if (upperExclusive <= 1) return 0;
@@ -76,6 +135,8 @@ void respawnPrecipitationParticle(PrecipitationState &state, PrecipitationPartic
   }
   particle.vx = 0;
   particle.vy = 0;
+  particle.airVx = 0;
+  particle.airVy = 0;
 }
 
 int16_t precipitationBaseFallSpeed(const Segment &seg) {
@@ -95,7 +156,10 @@ uint8_t precipitationSplashAgeStep(const Segment &seg, uint16_t deltaMs) {
   return uint8_t(min<uint32_t>(255U, step));
 }
 
-void updatePrecipitationMotion(PrecipitationParticle &particle, const Segment &seg) {
+// `wind` is the panel wind when the host has sent it; null keeps the fixed
+// c2 shear, for a segment driven from WLED's UI. Check 1 marks snow.
+void updatePrecipitationMotion(PrecipitationParticle &particle, const Segment &seg,
+                               const WindInputs *wind = nullptr, uint16_t deltaMs = 0) {
   const int16_t baseFall = precipitationBaseFallSpeed(seg);
   // Parallax: each particle's seed acts as a depth value (0..255 ≈ background
   // ..foreground). Background drops fall slower (~55%) and render dimmer; full
@@ -103,9 +167,27 @@ void updatePrecipitationMotion(PrecipitationParticle &particle, const Segment &s
   // instead of a flat wall of uniform particles.
   const int16_t depthMul = int16_t(140 + (uint16_t(particle.seed) >> 1));  // 140..267
   const int16_t fallSpeed = int16_t((int32_t(baseFall) * depthMul) >> 8);
-  const int16_t shear = int16_t(seg.custom2) - 128;
-  particle.vx = int16_t((int32_t)shear * max<int16_t>(8, fallSpeed) / 128);
-  particle.vy = fallSpeed;
+  if (!wind) {
+    const int16_t shear = int16_t(seg.custom2) - 128;
+    particle.vx = int16_t((int32_t)shear * max<int16_t>(8, fallSpeed) / 128);
+    particle.vy = fallSpeed;
+    return;
+  }
+  const bool snow = seg.check1;
+  // Far drops cross the screen slower on both axes, as they fall slower.
+  const float depth = depthMul / 256.0f;
+  float airX, airY;
+  samplePanelAir(*wind, float(particle.x) / PRECIPITATION_FP_SCALE + seg.start,
+                 float(particle.y) / PRECIPITATION_FP_SCALE + seg.startY, airX, airY);
+  const float follow = min(1.0f, deltaMs / 1000.0f
+    / (snow ? PRECIPITATION_SNOW_RESPONSE_S : PRECIPITATION_RAIN_RESPONSE_S));
+  float vx = particle.airVx / 16.0f, lift = particle.airVy / 16.0f;
+  vx += (airX * PRECIPITATION_AIR_SHARE * depth - vx) * follow;
+  lift += ((snow ? airY * PRECIPITATION_SNOW_LIFT * depth : 0.0f) - lift) * follow;
+  particle.airVx = int16_t(flowClamp(vx * 16, -32767, 32767));
+  particle.airVy = int16_t(flowClamp(lift * 16, -32767, 32767));
+  particle.vx = int16_t(vx);
+  particle.vy = int16_t(max(fallSpeed * PRECIPITATION_SNOW_MIN_FALL, fallSpeed + lift));
 }
 
 // Parallax-modulated despawn row. Background drops (low seed = far away)
@@ -253,7 +335,7 @@ void updatePrecipitationParticle(PrecipitationState &state, PrecipitationParticl
 
   if (particle.state == 0) {
     respawnPrecipitationParticle(state, particle, seg, false);
-    updatePrecipitationMotion(particle, seg);
+    updatePrecipitationMotion(particle, seg, state.wind, 1000);
     return;
   }
 
@@ -265,10 +347,14 @@ void updatePrecipitationParticle(PrecipitationState &state, PrecipitationParticl
     return;
   }
 
-  updatePrecipitationMotion(particle, seg);
+  updatePrecipitationMotion(particle, seg, state.wind, deltaMs);
   if (seg.speed == 0) return;
 
-  const int32_t moveX = (int32_t(particle.vx) * deltaMs * PRECIPITATION_FP_SCALE) / 1000L;
+  // In the air, move by the fine velocity: slow drift would otherwise round
+  // to whole px/s.
+  const int32_t moveX = state.wind
+    ? (int32_t(particle.airVx) * deltaMs * PRECIPITATION_FP_SCALE) / 16000L
+    : (int32_t(particle.vx) * deltaMs * PRECIPITATION_FP_SCALE) / 1000L;
   const int32_t moveY = (int32_t(particle.vy) * deltaMs * PRECIPITATION_FP_SCALE) / 1000L;
   particle.x += moveX;
   particle.y += moveY;
@@ -281,7 +367,8 @@ void updatePrecipitationParticle(PrecipitationState &state, PrecipitationParticl
   if (particle.y >= int32_t(despawnY) * PRECIPITATION_FP_SCALE) startPrecipitationSplash(state, particle, seg);
 }
 
-void renderPrecipitationToSegment(Segment &seg) {
+// `wind` is panelWindInputs() once the host has sent panel_wind, otherwise null.
+void renderPrecipitationToSegment(Segment &seg, const WindInputs *wind = nullptr) {
   PrecipitationState *state = nullptr;
   if (!ensurePrecipitationState(seg, state) || !state) {
     seg.fill(BLACK);
@@ -291,6 +378,8 @@ void renderPrecipitationToSegment(Segment &seg) {
   uint16_t deltaMs = min<uint32_t>(100, strip.now - state->lastUpdate);
   state->lastUpdate = strip.now;
   state->activeTarget = getPrecipitationActiveTarget(seg, state->particleCount);
+  state->wind = wind;
+  if (wind) advancePanelAir(*wind);
 
   seg.fill(BLACK);
   PrecipitationParticle *particles = getPrecipitationParticles(state);
