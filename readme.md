@@ -150,17 +150,41 @@ leave the segment on either axis re-enter at the upwind edge.
 | Check 1      | `Blow left`      | Reverses travel. Off blows right. |
 | Check 2 | `Fluid flow` | Enables the evolving fluid field; off retains standalone sine flutter. |
 
-An optional `wind_gust` JSON field on each segment sets the gust ceiling
-(0–255, same scale as `sx`). For example, `{"seg":[{"id":8,"sx":100,"wind_gust":220,"ix":15}]}`
-gives sparse particles with speeds ranging from mean wind to the gust ceiling.
-Zero, missing on effect selection, or a ceiling below `sx` gives steady mean
-wind. With a positive gust ceiling, `sx=0` allows particles to wait motionless
-between fronts. Partial updates without `wind_gust` preserve the current ceiling.
-The optional `wind_gust_activity` byte (0–255) controls synthesized cadence
-and roughness: weak gusts are rare and brief; stronger values produce more
-frequent, irregular surges with sharper attacks and uneven kicks. Neoblaster
-sends the same value to airborne Wind and ground Leaves; a full effect selection
-without it defaults to zero.
+**Panel wind.** The air is panel-wide, not per segment. A top-level
+`panel_wind` object sets it once for every effect that moves with it:
+
+```json
+{"panel_wind": {"mps10": [32, 59], "air": [56, 97], "activity": 94,
+  "turbulence": 150, "left": false,
+  "gust_tuning": {"spacing_pct": 125, "duration_pct": 25, "attack_ms": 20,
+                  "roughness_pct": 100, "response_ms": 470, "settle_ms": 50}}}
+```
+
+- `mps10`: mean and gust in physical m/s ×10 (0–255), for the fluid solvers
+  and ground leaves.
+- `air`: mean and gust on-panel air speed, on Wind's `sx` scale. A gust
+  below the mean gives steady wind; a positive gust with mean `0` lets
+  particles wait motionless between fronts.
+- `activity`: gustiness (0–255). Weak gusts are rare and brief; stronger
+  values give more frequent, irregular surges with sharper attacks and
+  uneven kicks.
+- `turbulence`: eddy strength in the air, on Wind's Custom 1 scale.
+- `left`: wind blows toward panel-left.
+- `gust_tuning`: spacing and duration scale the synthesized schedule; attack
+  is the front's rise time; roughness the uneven kicks. Response and settling
+  are how quickly particles follow a gust and return to the sustained
+  baseline; they do not touch the fluid grid, which relaxes on its own ~0.5 s
+  time constant. Defaults are the tuned nominal look shown above.
+
+Partial updates merge. `"panel_wind": false` hands the air back to each
+segment: Wind then reads `sx` as steady air speed, Custom 1 as eddies and
+Check 1 as direction, estimating m/s by inverting Neoblaster's default speed
+scale (4 m/s at `sx` 70, 17 m/s at 255); ground Leaves reads `sx`/`c2` as mean
+and gust m/s ×10, `c1` as gustiness and `o1` as direction. That is also the
+state after a reboot until a preset restores the wind: WLED presets store
+usermod state, so the boot preset carries `panel_wind`. `/json/state` reports
+`panel_wind` while it is set, and `/json/info.sprite_usermod.panel_wind`
+whether it is.
 
 Neoblaster also supplies `wind_spawn_rate` in particles per second (0–3,
 rounded to tenths). This starts with an empty panel and emits at the upwind
@@ -179,17 +203,8 @@ frequent, irregular surges with quick attacks and uneven kicks. Fronts travel
 downwind at 10 pixels/s; reversing the bearing reverses the front. Gustiness
 is derived from both absolute peak speed and excess over sustained wind.
 
-Both effects accept a per-segment `wind_gust_tuning` object. Its integer fields
-and defaults, the tuned nominal look, are `spacing_pct:125`, `duration_pct:25`,
-`attack_ms:20`, `roughness_pct:100`, `response_ms:470`, and `settle_ms:50`.
-Spacing and duration scale the synthesized schedule; attack controls the
-front's rise time; roughness controls uneven kicks. Response and settling
-control how quickly particles follow a gust and return to the sustained
-baseline; they do not touch the fluid grid, which relaxes on its own ~0.5 s
-time constant. Missing fields retain their current values on partial updates;
-a full effect selection without the object restores defaults. Neoblaster sends
-the same tuning to both layers: spacing, duration and roughness from three
-autosaving editor sliders, and attack, response and settling fixed at the
+Neoblaster sets `gust_tuning` from three autosaving editor sliders (spacing,
+duration and roughness) and holds attack, response and settling at the
 defaults.
 
 **Leaf hand-off.** While ground Leaves and Wind both run, they exchange leaves
@@ -215,22 +230,17 @@ Fluid flow. Three swirl sources feed the grid; each lives about 8 seconds,
 appears at a fresh spot, drifts downwind with the mean flow and fades out, so
 eddies never pin to fixed columns. Gusts feed them harder.
 
-The optional `wind_mps10` field (`[mean, gust]`, physical m/s ×10, 0–255) gives
-the Wind solver the real wind speeds that drive its turbulence. Without it, for
-example after a preset restore, the effect estimates them by inverting
-Neoblaster's default speed scale (4 m/s at `sx` 70, 17 m/s at 255).
-
-Each solver uses about 3 KB; `/json/info.sprite_usermod` reports `flow_grid`,
+The air field is one panel-wide 16×8 grid (a vertical slice, about 3 KB),
+advanced once per frame by whichever effect draws first, so every effect in
+that frame reads the same air. Ground Leaves keeps its own ground-plane grid
+(x by depth) in its segment data. `/json/info.sprite_usermod` reports `flow_grid`,
 plus `wind_us`/`wind_max_us` and `leaves_us`/`leaves_max_us` (whole-effect
 render time, ground Leaves only) for device performance checks.
 
 WLED's usermod state hook runs before it serializes segments, so `/json/state`
-reports top-level `wind_gust`, `wind_gust_activity`, `wind_gust_tuning`, `wind_mps10`, and `wind_spawn_rate`
-arrays indexed by segment id.
-A rate of `-1` denotes the legacy population mode.
-Neoblaster merges those into the corresponding live segments. Controls follow
-its fixed segment ids; ordinary WLED presets do not serialize this extension,
-so the scene controller reapplies the gust ceiling after a preset restore.
+reports `wind_spawn_rate` as a top-level array indexed by segment id. A rate
+of `-1` denotes the legacy population mode. Neoblaster merges it into the
+corresponding live segments.
 
 Suggested starting points:
 

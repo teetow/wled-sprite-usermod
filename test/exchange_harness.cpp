@@ -38,10 +38,14 @@ int main() {
   auto frame = [&](bool airRunning) {
     strip.now += 33;
     currentSegment = &litter;
-    renderLeavesToSegment(litter);
+    renderLeavesToSegment(litter, leafWindFromSegment(litter));
     if (airRunning) {
       currentSegment = &air;
-      renderWindToSegment(air, air.speed, 30, litter.custom1, DEFAULT_GUST_TUNING, litter.speed, litter.custom2);
+      // The litter's physical wind, with the air's own on-panel speed.
+      WindInputs wind = windInputsFromSegment(air, air.speed, litter.custom1);
+      wind.meanMps = litter.speed / 10.0f;
+      wind.gustMps = max(litter.speed, litter.custom2) / 10.0f;
+      renderWindToSegment(air, wind, 30);
     }
     assert(touchingLitter(litter) == 0);
     assert(litter.outOfBoundsWrites == 0 && air.outOfBoundsWrites == 0);

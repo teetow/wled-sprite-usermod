@@ -81,6 +81,8 @@ class Segment {
 
   uint16_t start = 0;
   uint16_t startY = 0;
+  // Matrix size, as in WLED. Harnesses set it to their panel.
+  static inline uint16_t maxWidth = 32, maxHeight = 16;
 
   uint8_t speed = 128;
   uint8_t intensity = 128;

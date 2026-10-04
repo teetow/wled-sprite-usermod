@@ -13,10 +13,10 @@
 // includes it against a stub Segment to step particle motion deterministically
 // on a host, with no ESP32 and no panel.
 
-#include "flow_field.hpp"
+#include "panel_wind.hpp"
 #include "leaf_exchange.hpp"
 
-constexpr uint32_t WIND_STATE_MAGIC = 0x574E4435UL;
+constexpr uint32_t WIND_STATE_MAGIC = 0x574E4436UL;
 constexpr uint16_t WIND_MAX_PARTICLES = 128;
 constexpr uint8_t WIND_FP_SHIFT = 8;
 constexpr int16_t WIND_FP_SCALE = 1 << WIND_FP_SHIFT;
@@ -48,8 +48,6 @@ struct WindState {
   uint32_t magic;
   uint32_t lastUpdate;
   uint32_t prngState;
-  uint8_t gustSpeed;
-  uint8_t gustActivity;
   bool timedSpawning;
   uint32_t spawnProgress;
   uint16_t spawnThreshold;
@@ -57,8 +55,7 @@ struct WindState {
   uint16_t height;
   uint16_t particleCount;
   uint16_t activeTarget;
-  FlowField flow;
-  GustTuning tuning;
+  WindInputs wind; // this frame's wind; the air field itself is panel-wide
 };
 
 inline WindParticle *getWindParticles(WindState *state) {
@@ -136,15 +133,12 @@ inline int32_t windDespawnMargin(const Segment &seg) {
   return int32_t(WIND_SPAWN_MARGIN_PX + seg.custom3 + 1) * WIND_FP_SCALE;
 }
 
-void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t gustSpeed,
-                      uint8_t gustActivity);
-
-int16_t windBaseSpeed(uint8_t speed);
+void updateWindMotion(WindParticle &particle, const Segment &seg, const WindInputs &wind);
 
 void respawnWindParticle(WindState &state, WindParticle &particle, const Segment &seg, bool startUpwind) {
   const uint16_t width = max<uint16_t>(1, state.width);
   const uint16_t height = max<uint16_t>(1, state.height);
-  const bool blowLeft = seg.check1;
+  const bool blowLeft = state.wind.blowLeft;
 
   particle.state = 1;
   particle.seed = uint8_t(windRandom(state, 255));
@@ -188,29 +182,22 @@ void respawnWindParticle(WindState &state, WindParticle &particle, const Segment
   particle.x = bestX;
   particle.y = bestY;
 
-  updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
-  particle.motionX = seg.check2 ? (seg.check1 ? -1 : 1) * windBaseSpeed(seg.speed) : particle.vx;
+  updateWindMotion(particle, seg, state.wind);
+  particle.motionX = seg.check2 ? (blowLeft ? -1 : 1) * windBaseSpeed(state.wind.airMean) : particle.vx;
   particle.motionY = seg.check2 ? 0 : particle.vy;
 }
 
-int16_t windBaseSpeed(uint8_t speed) {
-  // sx=1 ≈ 3 px/sec (a barely-moving leaf), sx=128 ≈ 31 px/sec (roughly one
-  // panel width per second), sx=255 ≈ 60 px/sec (debris).
-  return speed == 0 ? 0 : int16_t(map(speed, 1, 255, 3, 60));
-}
-
-void updateWindMotion(WindParticle &particle, const Segment &seg, uint8_t gustSpeed,
-                      uint8_t gustActivity) {
+void updateWindMotion(WindParticle &particle, const Segment &seg, const WindInputs &wind) {
   // Parallax, same contract as precipitation: seed doubles as a depth value.
   // Background particles travel slower and render dimmer.
   const int16_t depthMul = int16_t(140 + (uint16_t(particle.seed) >> 1));  // 140..267
-  const float mean = windBaseSpeed(seg.speed);
-  const float ceiling = windBaseSpeed(max(seg.speed, gustSpeed));
+  const float mean = windBaseSpeed(wind.airMean);
+  const float ceiling = windBaseSpeed(wind.airGust);
   const float x = float(particle.x) / WIND_FP_SCALE + seg.start;
   const float pulse = ceiling > mean
-    ? gustFieldStrength(x, strip.now, seg.check1, gustActivity) : 0.0f;
+    ? gustFieldStrength(x, strip.now, wind.blowLeft, wind.activity, wind.tuning) : 0.0f;
   const int16_t speed = int16_t((mean + (ceiling - mean) * pulse) * depthMul / 256.0f);
-  particle.vx = seg.check1 ? int16_t(-speed) : speed;
+  particle.vx = wind.blowLeft ? int16_t(-speed) : speed;
   // c2=128 is neutral, above it particles settle, below it they lift. ±16 px/s
   // at the extremes, scaled by the same depth so near particles fall faster.
   const int16_t drift = int16_t(int16_t(seg.custom2) - 128) / 8;
@@ -320,25 +307,26 @@ void updateWindParticle(WindState &state, WindParticle &particle, const Segment 
     return;
   }
 
-  if (!seg.check2 && seg.speed == 0 && state.gustSpeed == 0) return;
+  const WindInputs &wind = state.wind;
+  if (!seg.check2 && wind.airGust == 0) return;
   // Existing particles respond to the shared front at their current column.
   if (seg.check2) {
-    const float fx = float(particle.x) / WIND_FP_SCALE / state.width * FLOW_WIDTH - 0.5f;
-    const float fy = float(particle.y) / WIND_FP_SCALE / state.height * FLOW_HEIGHT - 0.5f;
-    const float depth = (140 + (uint16_t(particle.seed) >> 1)) / 256.0f;
     const float absoluteX = float(particle.x) / WIND_FP_SCALE + seg.start;
-    const float pulse = gustFieldStrength(absoluteX, strip.now, seg.check1, state.gustActivity, state.tuning);
-    const float responseMs = pulse > 0 ? state.tuning.responseMs : state.tuning.settleMs;
+    const float absoluteY = float(particle.y) / WIND_FP_SCALE + seg.startY;
+    const float fx = airGridX(absoluteX), fy = airGridY(absoluteY);
+    const float depth = (140 + (uint16_t(particle.seed) >> 1)) / 256.0f;
+    const float pulse = gustFieldStrength(absoluteX, strip.now, wind.blowLeft, wind.activity, wind.tuning);
+    const float responseMs = pulse > 0 ? wind.tuning.responseMs : wind.tuning.settleMs;
     const float coupling = min(1.0f, deltaMs / responseMs * (0.8f + particle.seed / 640.0f));
-    const float kick = (windBaseSpeed(max(seg.speed, state.gustSpeed)) - windBaseSpeed(seg.speed)) * pulse;
-    const float airX = flowSample(state.flow.u, fx, fy) + (seg.check1 ? -kick : kick);
+    const float kick = (windBaseSpeed(wind.airGust) - windBaseSpeed(wind.airMean)) * pulse;
+    const float airX = flowSample(airField.flow.u, fx, fy) + (wind.blowLeft ? -kick : kick);
     particle.motionX += (airX * depth - particle.motionX) * coupling;
     const float drift = (int(seg.custom2) - 128) / 8.0f
-      * flowClamp((windBaseSpeed(seg.speed) + kick) / 12.0f, 0, 1);
-    particle.motionY += ((flowSample(state.flow.v, fx, fy) + drift) * depth - particle.motionY) * coupling;
+      * flowClamp((windBaseSpeed(wind.airMean) + kick) / 12.0f, 0, 1);
+    particle.motionY += ((flowSample(airField.flow.v, fx, fy) + drift) * depth - particle.motionY) * coupling;
     particle.vx = int16_t(particle.motionX);
     particle.vy = int16_t(particle.motionY);
-  } else updateWindMotion(particle, seg, state.gustSpeed, state.gustActivity);
+  } else updateWindMotion(particle, seg, wind);
 
   if (seg.check2) {
     particle.x += int32_t(particle.motionX * deltaMs * WIND_FP_SCALE / 1000.0f);
@@ -366,7 +354,7 @@ void updateWindParticle(WindState &state, WindParticle &particle, const Segment 
 // recycling. Threshold jitter of +/-30% keeps a trickle from looking clockwork.
 // Budget units are milliseconds * tenths-of-a-particle/second: 10000 = one birth.
 void spawnTimedWind(WindState &state, const Segment &seg, int16_t rateTenths, uint16_t deltaMs) {
-  if (rateTenths <= 0 || (seg.speed == 0 && state.gustSpeed == 0) || state.activeTarget == 0) {
+  if (rateTenths <= 0 || state.wind.airGust == 0 || state.activeTarget == 0) {
     state.spawnProgress = 0;
     return;
   }
@@ -382,28 +370,6 @@ void spawnTimedWind(WindState &state, const Segment &seg, int16_t rateTenths, ui
     return;
   }
   // If the pool is full, drop this birth; never accumulate a catch-up burst.
-}
-
-// meanTenths/gustTenths are physical m/s x10 from the host. Negative values
-// fall back to inverting Neoblaster's default sx scale (4 m/s = 70, 17 = 255).
-// Kept out of line: inlined into renderWindToSegment, this float code trips an
-// internal compiler error in the ESP32 toolchain (Xtensa GCC 8.4, postreload).
-__attribute__((noinline)) void advanceWindFlow(WindState &state, const Segment &seg, uint16_t deltaMs,
-                                               uint8_t gustSpeed, uint8_t gustActivity, const GustTuning &tuning,
-                                               int16_t meanTenths, int16_t gustTenths) {
-  const auto physicalWind = [](uint8_t control) {
-    return control < 70 ? control * (4.0f / 70) : 4.0f + (control - 70) * (13.0f / 185);
-  };
-  const float meanMps = meanTenths >= 0 ? meanTenths / 10.0f : physicalWind(seg.speed);
-  const float gustMps = gustTenths >= 0 ? max(meanMps, gustTenths / 10.0f)
-    : physicalWind(max(seg.speed, gustSpeed));
-  state.flow.accumulator += deltaMs / 1000.0f;
-  while (state.flow.accumulator >= FLOW_STEP_SECONDS) {
-    state.flow.accumulator -= FLOW_STEP_SECONDS;
-    stepGroundFlow(state.flow, state.width, meanMps, gustMps,
-      gustActivity, seg.check1, seg.start, strip.now - uint32_t(state.flow.accumulator * 1000),
-      state.height, windBaseSpeed(seg.speed), 0.35f + seg.custom1 / 128.0f, tuning);
-  }
 }
 
 // A ground leaf lifted clear of the horizon continues here as an airborne
@@ -434,10 +400,9 @@ void adoptLiftedLeaves(WindState &state, const Segment &seg) {
   }
 }
 
-// meanTenths/gustTenths are physical m/s x10 from the host; see advanceWindFlow.
-void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0,
-                         int16_t spawnRateTenths = -1, uint8_t gustActivity = 0, const GustTuning &tuning = DEFAULT_GUST_TUNING,
-                         int16_t meanTenths = -1, int16_t gustTenths = -1) {
+// `wind` is panelWindInputs() once the host has sent panel_wind, otherwise
+// windInputsFromSegment(seg).
+void renderWindToSegment(Segment &seg, const WindInputs &wind, int16_t spawnRateTenths = -1) {
   WindState *state = nullptr;
   if (!ensureWindState(seg, state) || !state) {
     seg.fill(BLACK);
@@ -452,13 +417,11 @@ void renderWindToSegment(Segment &seg, uint8_t gustSpeed = 0,
     state->spawnThreshold = 0;
   }
   state->timedSpawning = timed;
-  state->gustSpeed = gustSpeed;
-  state->gustActivity = gustActivity;
-  state->tuning = tuning;
+  state->wind = wind;
   state->activeTarget = timed && seg.intensity > 0
     ? state->particleCount : getWindActiveTarget(seg, state->particleCount);
 
-  if (seg.check2) advanceWindFlow(*state, seg, deltaMs, gustSpeed, gustActivity, tuning, meanTenths, gustTenths);
+  if (seg.check2) advancePanelAir(wind);
   adoptLiftedLeaves(*state, seg);
   seg.fill(BLACK);
   WindParticle *particles = getWindParticles(state);

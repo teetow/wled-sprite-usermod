@@ -19,53 +19,18 @@ static uint32_t windDrawUs = 0, windMaxDrawUs = 0, leavesDrawUs = 0, leavesMaxDr
 #include "wind_effect.hpp"
 #include "leaves_effect.hpp"
 
-// Optional per-segment gust ceiling in the same 0..255 scale as sx. Zero
-// falls back to sx. Stored outside effect data so resizing preserves controls.
+// Wind's own spawn rate, per segment. Stored outside effect data so resizing
+// preserves it. Everything about the air itself is panel-wide: see panel_wind.hpp.
 struct WindControls {
-  GustTuning tuning;
-  uint8_t gust = 0;
-  uint8_t gustActivity = 0;
   int16_t spawnRateTenths = -1; // negative preserves the standalone density mode
-  int16_t meanTenths = -1, gustTenths = -1; // physical m/s x10; negative = derive from sx
 };
 static WindControls windControls[MAX_NUM_SEGMENTS];
 
 void readWindSegment(JsonObject elem, int id) {
   if (id < 0 || id >= strip.getSegmentsNum() || id >= MAX_NUM_SEGMENTS) return;
-  if (strip.getSegment(id).mode != windEffectId && strip.getSegment(id).mode != leavesEffectId) {
+  if (strip.getSegment(id).mode != windEffectId) {
     windControls[id] = WindControls{};
     return;
-  }
-  if (elem.containsKey("wind_gust_tuning")) {
-    JsonObject obj = elem["wind_gust_tuning"];
-    GustTuning &tuning = windControls[id].tuning;
-    tuning.spacingPct = uint16_t(max(25, min(600, obj["spacing_pct"] | int(tuning.spacingPct))));
-    tuning.durationPct = uint16_t(max(25, min(200, obj["duration_pct"] | int(tuning.durationPct))));
-    tuning.attackMs = uint16_t(max(20, min(500, obj["attack_ms"] | int(tuning.attackMs))));
-    tuning.roughnessPct = uint8_t(max(0, min(100, obj["roughness_pct"] | int(tuning.roughnessPct))));
-    tuning.responseMs = uint16_t(max(30, min(1000, obj["response_ms"] | int(tuning.responseMs))));
-    tuning.settleMs = uint16_t(max(50, min(2000, obj["settle_ms"] | int(tuning.settleMs))));
-  } else if (elem.containsKey("fx")) windControls[id].tuning = GustTuning{};
-  if (elem.containsKey("wind_mps10")) {
-    JsonArray speeds = elem["wind_mps10"];
-    const int mean = speeds[0] | -1, gust = speeds[1] | -1;
-    windControls[id].meanTenths = int16_t(mean < 0 ? -1 : min(255, mean));
-    windControls[id].gustTenths = int16_t(gust < 0 ? -1 : min(255, gust));
-  } else if (elem.containsKey("fx")) {
-    windControls[id].meanTenths = windControls[id].gustTenths = -1;
-  }
-  if (elem.containsKey("wind_gust")) {
-    const int value = elem["wind_gust"] | 0;
-    windControls[id].gust = uint8_t(max(0, min(255, value)));
-  } else if (elem.containsKey("fx")) {
-    // A full effect selection/preset without this extension means steady wind.
-    windControls[id].gust = 0;
-  }
-  if (elem.containsKey("wind_gust_activity")) {
-    const int value = elem["wind_gust_activity"] | 0;
-    windControls[id].gustActivity = uint8_t(max(0, min(255, value)));
-  } else if (elem.containsKey("fx")) {
-    windControls[id].gustActivity = 0;
   }
   if (elem.containsKey("wind_spawn_rate")) {
     const float rate = elem["wind_spawn_rate"] | -1.0f;
@@ -75,7 +40,46 @@ void readWindSegment(JsonObject elem, int id) {
   }
 }
 
+// Partial updates merge into what the host sent before. `false` hands the
+// wind back to each segment's own controls.
+void readPanelWind(JsonVariant value) {
+  if (value.isNull()) return;
+  PanelWind &wind = panelWind;
+  if (value.is<bool>()) {
+    if (!value.as<bool>()) wind = PanelWind{};
+    return;
+  }
+  if (!value.is<JsonObject>()) return;
+  JsonObject obj = value.as<JsonObject>();
+  const auto clampByte = [](int v) { return uint8_t(max(0, min(255, v))); };
+  if (obj.containsKey("mps10")) {
+    JsonArray speeds = obj["mps10"];
+    wind.meanTenths = clampByte(speeds[0] | int(wind.meanTenths));
+    wind.gustTenths = clampByte(speeds[1] | int(wind.gustTenths));
+  }
+  if (obj.containsKey("air")) {
+    JsonArray speeds = obj["air"];
+    wind.airMean = clampByte(speeds[0] | int(wind.airMean));
+    wind.airGust = clampByte(speeds[1] | int(wind.airGust));
+  }
+  if (obj.containsKey("activity")) wind.activity = clampByte(obj["activity"] | int(wind.activity));
+  if (obj.containsKey("turbulence")) wind.turbulence = clampByte(obj["turbulence"] | int(wind.turbulence));
+  if (obj.containsKey("left")) wind.blowLeft = obj["left"] | wind.blowLeft;
+  if (obj.containsKey("gust_tuning")) {
+    JsonObject t = obj["gust_tuning"];
+    GustTuning &tuning = wind.tuning;
+    tuning.spacingPct = uint16_t(max(25, min(600, t["spacing_pct"] | int(tuning.spacingPct))));
+    tuning.durationPct = uint16_t(max(25, min(200, t["duration_pct"] | int(tuning.durationPct))));
+    tuning.attackMs = uint16_t(max(20, min(500, t["attack_ms"] | int(tuning.attackMs))));
+    tuning.roughnessPct = uint8_t(max(0, min(100, t["roughness_pct"] | int(tuning.roughnessPct))));
+    tuning.responseMs = uint16_t(max(30, min(1000, t["response_ms"] | int(tuning.responseMs))));
+    tuning.settleMs = uint16_t(max(50, min(2000, t["settle_ms"] | int(tuning.settleMs))));
+  }
+  wind.valid = true;
+}
+
 void readWindState(JsonObject &root) {
+  readPanelWind(root["panel_wind"]);
   if (root[F("rSeg")] | false) for (auto &controls : windControls) controls = WindControls{};
   JsonVariant segments = root["seg"];
   if (segments.is<JsonArray>()) {
@@ -95,33 +99,31 @@ void readWindState(JsonObject &root) {
   }
 }
 
-// WLED invokes this hook before serializing seg[], so report the extra control
-// separately, indexed by segment id. Neoblaster folds it into the live segments.
+// WLED invokes this hook before serializing seg[], so the per-segment spawn
+// rate is reported as a top-level array indexed by segment id. Neoblaster
+// folds it into the live segments.
 void addWindState(JsonObject &root) {
-  JsonArray gusts = root.createNestedArray("wind_gust");
-  JsonArray activities = root.createNestedArray("wind_gust_activity");
+  if (panelWind.valid) {
+    JsonObject wind = root.createNestedObject("panel_wind");
+    JsonArray mps = wind.createNestedArray("mps10");
+    mps.add(panelWind.meanTenths);
+    mps.add(panelWind.gustTenths);
+    JsonArray air = wind.createNestedArray("air");
+    air.add(panelWind.airMean);
+    air.add(panelWind.airGust);
+    wind["activity"] = panelWind.activity;
+    wind["turbulence"] = panelWind.turbulence;
+    wind["left"] = panelWind.blowLeft;
+    JsonObject tuning = wind.createNestedObject("gust_tuning");
+    tuning["spacing_pct"] = panelWind.tuning.spacingPct;
+    tuning["duration_pct"] = panelWind.tuning.durationPct;
+    tuning["attack_ms"] = panelWind.tuning.attackMs;
+    tuning["roughness_pct"] = panelWind.tuning.roughnessPct;
+    tuning["response_ms"] = panelWind.tuning.responseMs;
+    tuning["settle_ms"] = panelWind.tuning.settleMs;
+  }
   JsonArray rates = root.createNestedArray("wind_spawn_rate");
-  JsonArray tunings = root.createNestedArray("wind_gust_tuning");
-  JsonArray speeds = root.createNestedArray("wind_mps10");
   for (unsigned id = 0; id < strip.getSegmentsNum(); id++) {
-    gusts.add(strip.getSegment(id).mode == windEffectId ? windControls[id].gust : 0);
-    activities.add(strip.getSegment(id).mode == windEffectId ? windControls[id].gustActivity : 0);
-    JsonObject obj = tunings.createNestedObject();
-    const Segment &seg = strip.getSegment(id);
-    if (seg.mode == windEffectId || (seg.mode == leavesEffectId && !seg.check2)) {
-      const GustTuning &tuning = windControls[id].tuning;
-      obj["spacing_pct"] = tuning.spacingPct;
-      obj["duration_pct"] = tuning.durationPct;
-      obj["attack_ms"] = tuning.attackMs;
-      obj["roughness_pct"] = tuning.roughnessPct;
-      obj["response_ms"] = tuning.responseMs;
-      obj["settle_ms"] = tuning.settleMs;
-    }
-    JsonArray speed = speeds.createNestedArray();
-    if (seg.mode == windEffectId && windControls[id].meanTenths >= 0) {
-      speed.add(windControls[id].meanTenths);
-      speed.add(windControls[id].gustTenths);
-    }
     const int16_t rate = windControls[id].spawnRateTenths;
     rates.add(strip.getSegment(id).mode == windEffectId && rate >= 0 ? rate / 10.0f : -1.0f);
   }
@@ -160,6 +162,7 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("leaves_us")] = leavesDrawUs;
   spriteInfo[F("leaves_max_us")] = leavesMaxDrawUs;
   spriteInfo[F("flow_grid")] = "16x8";
+  spriteInfo[F("panel_wind")] = panelWind.valid;
   spriteInfo[F("leaf_lifts")] = leafExchange.liftsTaken;
   spriteInfo[F("leaf_landings")] = leafExchange.landingsTaken;
   spriteInfo[F("err")] = spriteStats.lastError;
@@ -228,9 +231,8 @@ void modeWindUsermod() {
     return;
   }
   const uint32_t start = micros();
-  const WindControls &controls = windControls[strip.getCurrSegmentId()];
-  renderWindToSegment(SEGMENT, controls.gust, controls.spawnRateTenths, controls.gustActivity,
-                      controls.tuning, controls.meanTenths, controls.gustTenths);
+  const WindInputs wind = panelWind.valid ? panelWindInputs() : windInputsFromSegment(SEGMENT);
+  renderWindToSegment(SEGMENT, wind, windControls[strip.getCurrSegmentId()].spawnRateTenths);
   windDrawUs = micros() - start;
   windMaxDrawUs = max(windMaxDrawUs, windDrawUs);
 }
@@ -241,7 +243,7 @@ void modeLeavesUsermod() {
     return;
   }
   const uint32_t start = micros();
-  renderLeavesToSegment(SEGMENT, windControls[strip.getCurrSegmentId()].tuning);
+  renderLeavesToSegment(SEGMENT, panelWind.valid ? panelWindInputs() : leafWindFromSegment(SEGMENT));
   // Only the ground instance runs the fluid solver; shedding would mask it.
   if (!SEGMENT.check2) {
     leavesDrawUs = micros() - start;

@@ -93,13 +93,16 @@ int main() {
   // Runtime airborne mode samples evolving flow, without applying per-particle sine flutter.
   strip.now = 1000;
   Segment air(32, 16);
+  Segment::maxWidth = 32;
+  Segment::maxHeight = 16;
+  resetPanelAir();
   air.check2 = true;
   air.speed = 127; air.intensity = 255; air.custom1 = 128; air.custom2 = 128;
   currentSegment = &air;
   unsigned crossFlowFrames = 0;
   for (unsigned frame = 0; frame < 900; frame++) {
     strip.now += 33;
-    renderWindToSegment(air, 212, -1, 228);
+    renderWindToSegment(air, windInputsFromSegment(air, 212, 228), -1);
     auto &runtime = *reinterpret_cast<WindState *>(air.data);
     for (unsigned i = 0; i < runtime.particleCount; i++) {
       const auto &leaf = getWindParticles(&runtime)[i];
@@ -108,5 +111,15 @@ int main() {
     }
   }
   assert(crossFlowFrames > 100 && air.outOfBoundsWrites == 0);
+
+  // One air for the panel: another effect drawing in the same frame reads it
+  // and never steps it a second time.
+  float airBefore[FLOW_CELLS];
+  memcpy(airBefore, airField.flow.u, sizeof(airBefore));
+  Segment second(32, 16);
+  second.check2 = true;
+  second.intensity = 255;
+  renderWindToSegment(second, windInputsFromSegment(air, 212, 228), -1);
+  assert(memcmp(airBefore, airField.flow.u, sizeof(airBefore)) == 0);
   printf("Fluid projection, decaying wakes, gust cadence and airborne transport passed.\n");
 }

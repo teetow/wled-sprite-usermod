@@ -78,13 +78,16 @@ struct WindRig {
     seg.custom3 = 0;
     strip.now = startMs;
     currentSegment = &seg;
+    Segment::maxWidth = width;
+    Segment::maxHeight = height;
+    resetPanelAir();
   }
 
   // One rendered frame, advancing the owned clock by exactly deltaMs.
   void step(uint32_t deltaMs = 33) {
     currentSegment = &seg;
     strip.now += deltaMs;
-    renderWindToSegment(seg, gustSpeed, spawnRateTenths, gustActivity);
+    renderWindToSegment(seg, windInputsFromSegment(seg, gustSpeed, gustActivity), spawnRateTenths);
   }
 
   WindState *state() { return reinterpret_cast<WindState *>(seg.data); }
@@ -364,7 +367,7 @@ static void testSharedGroundFront() {
   ground.custom1 = 128;
   ground.intensity = 10;
   strip.now = 1033;
-  renderLeavesToSegment(ground);
+  renderLeavesToSegment(ground, leafWindFromSegment(ground));
 
   uint32_t lullTime = 0, peakTime = 0;
   for (uint32_t t = 2000; t < 60000 && (!lullTime || !peakTime); t += 50) {
@@ -382,7 +385,7 @@ static void testSharedGroundFront() {
     flying.state = 1;
     air.state()->lastUpdate = now - 50;
     strip.now = now;
-    renderWindToSegment(air.seg, air.gustSpeed, -1, air.gustActivity);
+    renderWindToSegment(air.seg, windInputsFromSegment(air.seg, air.gustSpeed, air.gustActivity), -1);
     const int airSpeed = flying.vx;
 
     LeavesState &litter = *reinterpret_cast<LeavesState *>(ground.data);
@@ -392,7 +395,7 @@ static void testSharedGroundFront() {
     leaf.active = true;
     leaf.age = 15000;
     litter.lastUpdate = now - 50;
-    renderLeavesToSegment(ground);
+    renderLeavesToSegment(ground, leafWindFromSegment(ground));
     return std::pair<int, float>{airSpeed, leaf.x - 8};
   };
   const auto lull = sample(lullTime);

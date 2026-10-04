@@ -1,10 +1,10 @@
 // Persistent autumn litter and occasional canopy shedding. The host owns the
 // calendar, snow coverage and tree palette; this effect owns only motion/time.
 // Two instances share this effect: a ground band and a narrow tree-foot strip.
-#include "flow_field.hpp"
+#include "panel_wind.hpp"
 #include "leaf_exchange.hpp"
 
-constexpr uint32_t LEAVES_MAGIC = 0x4c45414aUL;
+constexpr uint32_t LEAVES_MAGIC = 0x4c45414bUL;
 constexpr unsigned LEAVES_CAPACITY = 32;
 constexpr unsigned LEAVES_SHED_CAPACITY = 2;
 constexpr uint32_t LEAF_SPAWN_MS = 10000;
@@ -48,7 +48,8 @@ struct LeavesState {
   bool shedding;
   uint8_t spawnerCount;
   LeafParticle particles[LEAVES_CAPACITY];
-  FlowField flow;
+  FlowField flow; // the ground plane (x by depth), unlike the panel's air slice
+  WindInputs wind; // this frame's wind
 };
 
 uint32_t leafRandom(LeavesState &state, uint32_t limit) {
@@ -239,9 +240,9 @@ void retireGroundLeaf(LeavesState &state, LeafParticle &leaf) {
 bool arriveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg, float target) {
   // Initial litter and calm-weather arrivals settle in place. Once wind can
   // move litter, most arrivals are carried in from upwind at a fresh depth.
-  const bool carried = leaf.stage == 1 && max(seg.speed, seg.custom2) >= 30
+  const bool carried = leaf.stage == 1 && state.wind.gustMps >= 3.0f
     && leafRandom(state, 100) < 65;
-  if (carried && enterGroundLeafFromEdge(state, leaf, target, seg.check1)) return true;
+  if (carried && enterGroundLeafFromEdge(state, leaf, target, state.wind.blowLeft)) return true;
   if (spawnGroundLeaf(state, leaf, target)) return true;
   leaf.wait = 250 + leafRandom(state, 501); // no free spot yet; retry shortly
   return false;
@@ -341,14 +342,16 @@ void groundLeafAvoidance(const LeavesState &state, const LeafParticle &leaf, flo
   awayDepth = LEAF_AVOID_STRENGTH * screenY * groundDepthPerRow(state, leaf.depth);
 }
 
-void moveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg, float seconds, const GustTuning &tuning = DEFAULT_GUST_TUNING) {
+void moveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg, float seconds) {
+  const WindInputs &wind = state.wind;
+  const GustTuning &tuning = wind.tuning;
   const LeafParticle before = leaf;
   const float fx = (leaf.worldX + state.width) / (state.width * 3.0f) * FLOW_WIDTH - 0.5f;
   const float fy = leaf.depth * FLOW_HEIGHT - 0.5f;
-  const float pulse = gustFieldStrength(leaf.x + seg.start, strip.now, seg.check1, seg.custom1, tuning);
-  const float meanMps = seg.speed / 10.0f, gustMps = max(seg.speed, seg.custom2) / 10.0f;
+  const float pulse = gustFieldStrength(leaf.x + seg.start, strip.now, wind.blowLeft, wind.activity, tuning);
+  const float meanMps = wind.meanMps, gustMps = wind.gustMps;
   const float kick = (groundFlowSpeed(gustMps) - groundFlowSpeed(meanMps)) * pulse;
-  float airX = flowSample(state.flow.u, fx, fy) + (seg.check1 ? -kick : kick);
+  float airX = flowSample(state.flow.u, fx, fy) + (wind.blowLeft ? -kick : kick);
   float airY = flowSample(state.flow.v, fx, fy);
   const float updraft = airY; // lift reads the resolved flow, never the flutter
   // Each leaf's own flutter: small-scale turbulence the 16x8 grid cannot
@@ -486,7 +489,9 @@ void drawLeaf(Segment &seg, float x, float y, uint32_t color, float opacity, boo
   seg.setPixelColorXY(px, py, RGBW32(R(rgb), G(rgb), B(rgb), combined));
 }
 
-void renderLeavesToSegment(Segment &seg, const GustTuning &tuning = DEFAULT_GUST_TUNING) {
+// `wind` is panelWindInputs() once the host has sent panel_wind, otherwise
+// leafWindFromSegment(seg). Shedding ignores it.
+void renderLeavesToSegment(Segment &seg, const WindInputs &wind) {
   seg.fill(BLACK);
   const uint16_t width = seg.vWidth(), height = seg.vHeight();
   if (!width || !height) return;
@@ -494,7 +499,7 @@ void renderLeavesToSegment(Segment &seg, const GustTuning &tuning = DEFAULT_GUST
   auto &state = *reinterpret_cast<LeavesState *>(seg.data);
   const uint16_t groundTop = seg.check2 ? 0 : min<uint16_t>(seg.custom3, height - 1);
   if (state.magic != LEAVES_MAGIC || state.width != width || state.height != height || state.shedding != seg.check2 || state.groundTop != groundTop) {
-    memset(&state, 0, sizeof(state));
+    memset(static_cast<void *>(&state), 0, sizeof(state));
     state.magic = LEAVES_MAGIC;
     state.width = width; state.height = height; state.groundTop = groundTop; state.shedding = seg.check2;
     state.lastUpdate = strip.now;
@@ -504,6 +509,7 @@ void renderLeavesToSegment(Segment &seg, const GustTuning &tuning = DEFAULT_GUST
     if (state.spawnerCount > 1) state.particles[1].wait = shedLeafWait(state, seg);
   }
   // Pauses/stalls must never cause a burst of accumulated falling events.
+  state.wind = wind;
   const uint32_t dt = min<uint32_t>(100, strip.now - state.lastUpdate);
   state.lastUpdate = strip.now;
   const float seconds = dt / 1000.0f;
@@ -514,8 +520,8 @@ void renderLeavesToSegment(Segment &seg, const GustTuning &tuning = DEFAULT_GUST
     while (state.flow.accumulator >= FLOW_STEP_SECONDS) {
       state.flow.accumulator -= FLOW_STEP_SECONDS;
       const uint32_t simulationNow = strip.now - uint32_t(state.flow.accumulator * 1000);
-      stepGroundFlow(state.flow, width, seg.speed / 10.0f, max(seg.speed, seg.custom2) / 10.0f,
-        seg.custom1, seg.check1, seg.start, simulationNow, 0, 0, 1, tuning);
+      stepGroundFlow(state.flow, width, wind.meanMps, wind.gustMps,
+        wind.activity, wind.blowLeft, seg.start, simulationNow, 0, 0, 1, wind.tuning);
     }
     settleAirborneLeaves(state, seg, target);
   }
@@ -556,7 +562,7 @@ void renderLeavesToSegment(Segment &seg, const GustTuning &tuning = DEFAULT_GUST
       }
     } else if (!state.shedding || leaf.stage == 3) {
       if (!state.shedding) {
-        moveGroundLeaf(state, leaf, seg, seconds, tuning);
+        moveGroundLeaf(state, leaf, seg, seconds);
       }
       if (state.shedding && leaf.age >= LEAF_DESPAWN_MS) {
         leaf.active = false;

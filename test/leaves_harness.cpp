@@ -15,7 +15,7 @@ static GustTuning stepTuning = referenceTuning();
 static void step(Segment &seg, uint32_t dt = 50) {
   strip.now += dt;
   currentSegment = &seg;
-  renderLeavesToSegment(seg, stepTuning);
+  renderLeavesToSegment(seg, leafWindFromSegment(seg, stepTuning));
 }
 
 static LeavesState &state(Segment &seg) { return *reinterpret_cast<LeavesState *>(seg.data); }
@@ -397,9 +397,13 @@ int main() {
   projectGroundLeaf(responseState, fast); projectGroundLeaf(responseState, slow);
   GustTuning quick = DEFAULT_GUST_TUNING, sluggish = DEFAULT_GUST_TUNING;
   quick.responseMs = 30; sluggish.responseMs = 1000;
+  auto moveWith = [&](LeafParticle &leaf, const GustTuning &tuning) {
+    responseState.wind = leafWindFromSegment(gustTest, tuning);
+    moveGroundLeaf(responseState, leaf, gustTest, 0.02f);
+  };
   for (unsigned frame = 0; frame < 1; frame++) {
-    moveGroundLeaf(responseState, fast, gustTest, 0.02f, quick);
-    moveGroundLeaf(responseState, slow, gustTest, 0.02f, sluggish);
+    moveWith(fast, quick);
+    moveWith(slow, sluggish);
   }
   assert(fast.vx > slow.vx * 3 && fast.vx > 10);
   gustTest.custom2 = 0;
@@ -407,8 +411,8 @@ int main() {
   fast.vx = slow.vx = 10;
   fast.worldX = slow.worldX = 16;
   for (unsigned frame = 0; frame < 10; frame++) {
-    moveGroundLeaf(responseState, fast, gustTest, 0.02f, quick);
-    moveGroundLeaf(responseState, slow, gustTest, 0.02f, sluggish);
+    moveWith(fast, quick);
+    moveWith(slow, sluggish);
   }
   assert(fast.vx < 0.05f && slow.vx > 5);
 
