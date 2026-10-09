@@ -97,6 +97,7 @@ inline void stepGroundFlow(FlowField &field, float panelWidth, float meanMps, fl
   // Spatial sources disturb strong sustained wind; gusts feed them harder.
   // The solver carries and reshapes their wakes after the forcing subsides.
   const float domainHeight = airborne ? airHeight : 24.0f;
+  const float strong = strongGustAmount(gustMps);
   SwirlSource swirls[FLOW_SWIRLS];
   for (unsigned source = 0; source < FLOW_SWIRLS; source++) {
     // Staggered lifetimes keep roughly two sources alive. Each appears at a
@@ -111,7 +112,7 @@ inline void stepGroundFlow(FlowField &field, float panelWidth, float meanMps, fl
     swirls[source] = {
       centerX,
       domainHeight * (0.2f + ((hash >> 10) & 255U) / 425.0f),
-      airborne ? max(2.0f, airHeight * 0.3f) : 5.0f + source,
+      (airborne ? max(2.0f, airHeight * 0.3f) : 5.0f + source) * (1 + strong * 0.45f),
       // sin(pi*age) averages 2/pi; 1.5 keeps the mean forcing near its old level.
       1.5f * sinf(3.1415927f * age) * ((hash >> 18) & 1U ? -1.0f : 1.0f),
     };
@@ -123,7 +124,7 @@ inline void stepGroundFlow(FlowField &field, float panelWidth, float meanMps, fl
     const float scale = airborne ? 1 : 1 / (3 - 2 * depth);
     const float worldX = (x + 0.5f) * dx - (airborne ? 0 : panelWidth);
     const float screenX = panelWidth * 0.5f + (worldX - panelWidth * 0.5f) * scale;
-    const float pulse = gustFieldStrength(screenX + panelStart, now, blowLeft, activity, tuning);
+    const float pulse = gustFieldStrength(screenX + panelStart, now, blowLeft, activity, tuning, gustMps);
     const float localMps = meanMps + (gustMps - meanMps) * pulse;
     const float target = direction * mean;
     // The grid relaxes at its own rate; the leaf response and settling
@@ -134,7 +135,7 @@ inline void stepGroundFlow(FlowField &field, float panelWidth, float meanMps, fl
     // Forcing scales with the relaxation rate, so swirl amplitude does not
     // depend on how quickly the grid returns to the mean.
     const float turbulence = max(0.0f, localMps - 2.0f) * (0.55f + pulse * FLOW_GUST_SWIRL_BOOST)
-      * (1 + max(0.0f, localMps - 6.0f) * 0.12f) * turbulenceGain * FLOW_RELAX_PER_SECOND * 0.5f;
+      * (1 + max(0.0f, localMps - 6.0f) * 0.12f) * turbulenceGain * FLOW_RELAX_PER_SECOND * 0.5f * (1 + strong * pulse * 1.8f);
     for (const SwirlSource &swirl : swirls) {
       float rx = (x + 0.5f) * dx - swirl.x;
       rx -= floorf(rx / worldWidth + 0.5f) * worldWidth;

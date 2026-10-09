@@ -28,11 +28,19 @@ struct GustTuning {
 };
 static const GustTuning DEFAULT_GUST_TUNING;
 
+// The 10–20 m/s band needs increasingly developed gusts, rather than the
+// same short jab at every speed. Smooth onset avoids a jump at 10 m/s.
+inline float strongGustAmount(float gustMps) {
+  const float t = flowClamp((gustMps - 10.0f) / 10.0f, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 // Epoch lengths divide millis' range. Changing spacing changes the number of
 // events per epoch, preserving rollover continuity and inter-segment coherence.
 inline float gustFieldStrength(float absoluteX, uint32_t now, bool blowLeft,
-                               uint8_t activity = 0, const GustTuning &tuning = DEFAULT_GUST_TUNING) {
+                               uint8_t activity = 0, const GustTuning &tuning = DEFAULT_GUST_TUNING, float gustMps = 0) {
   const float severity = activity / 255.0f;
+  const float strong = strongGustAmount(gustMps);
   const float rough = severity * tuning.roughnessPct / 100.0f;
   const float downwindX = blowLeft ? -absoluteX : absoluteX;
   const uint32_t travelMs = uint32_t(int32_t(downwindX * 100.0f));
@@ -40,7 +48,7 @@ inline float gustFieldStrength(float absoluteX, uint32_t now, bool blowLeft,
   constexpr uint32_t EPOCH_MS = 131072;
   const uint32_t epoch = localTime / EPOCH_MS;
   const float phase = float(localTime % EPOCH_MS);
-  const unsigned events = max(1U, unsigned((4 + severity * 24) * 100 / tuning.spacingPct));
+  const unsigned events = max(1U, unsigned((4 + severity * 24) * (1 + strong * 0.25f) * 100 / tuning.spacingPct));
   const float slot = EPOCH_MS / float(events);
   // Each gust starts by 0.42 of its slot and lasts at most half a slot, so
   // only the gust owning the current slot can be active.
@@ -48,7 +56,7 @@ inline float gustFieldStrength(float absoluteX, uint32_t now, bool blowLeft,
   const uint32_t hash = gustHash(epoch * 17U + event * 7919U + 0x6a09e667U);
   const float start = slot * (event + 0.12f + 0.3f * (hash & 255U) / 255.0f);
   const float duration = min(slot * 0.5f, (550.0f + 1800.0f * severity)
-    * (0.7f + ((hash >> 8) & 255U) / 425.0f) * tuning.durationPct / 100.0f);
+    * (0.7f + ((hash >> 8) & 255U) / 425.0f) * tuning.durationPct / 100.0f * (1 + strong * 2.5f));
   const float elapsed = phase - start;
   if (elapsed < 0 || elapsed >= duration) return 0;
   const float attack = min(duration * 0.4f, float(tuning.attackMs));
@@ -58,7 +66,9 @@ inline float gustFieldStrength(float absoluteX, uint32_t now, bool blowLeft,
   if (severity < 0.35f) pulse = pulse * pulse * (3.0f - 2.0f * pulse);
   const unsigned kick = unsigned(t * 8.0f);
   const float jagged = 0.58f + 0.42f * ((gustHash(hash + kick) >> 8) & 255U) / 255.0f;
-  pulse *= 1 - rough * (1 - jagged);
+  // Strong fronts retain a firm peak; roughness varies the force without
+  // cutting a 20 m/s report into a succession of weak kicks.
+  pulse *= 1 - rough * (1 - jagged) * (1 - strong * 0.55f);
   const float peak = event == 0 ? 1.0f : 0.82f + 0.18f * ((hash >> 16) & 255U) / 255.0f;
   return pulse * peak;
 }

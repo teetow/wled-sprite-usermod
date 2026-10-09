@@ -195,7 +195,7 @@ void updateWindMotion(WindParticle &particle, const Segment &seg, const WindInpu
   const float ceiling = windBaseSpeed(wind.airGust);
   const float x = float(particle.x) / WIND_FP_SCALE + seg.start;
   const float pulse = ceiling > mean
-    ? gustFieldStrength(x, strip.now, wind.blowLeft, wind.activity, wind.tuning) : 0.0f;
+    ? gustFieldStrength(x, strip.now, wind.blowLeft, wind.activity, wind.tuning, wind.gustMps) : 0.0f;
   const int16_t speed = int16_t((mean + (ceiling - mean) * pulse) * depthMul / 256.0f);
   particle.vx = wind.blowLeft ? int16_t(-speed) : speed;
   // c2=128 is neutral, above it particles settle, below it they lift. ±16 px/s
@@ -290,7 +290,7 @@ bool settleWindLeaf(WindParticle &particle, const Segment &seg) {
   exchange.groundRoom--;
   exchange.landingsOffered++;
   if (column >= 0 && column < int(LEAF_EXCHANGE_MAX_COLUMNS) && row < int(LEAF_EXCHANGE_MAX_ROWS))
-    exchange.groundLit[row] |= uint64_t(1) << column; // no second landing beside it this frame
+    exchange.groundLit[row] |= uint64_t(1) << column; // reserve this LED for the frame
   particle.state = 0;
   return true;
 }
@@ -315,7 +315,7 @@ void updateWindParticle(WindState &state, WindParticle &particle, const Segment 
     const float absoluteY = float(particle.y) / WIND_FP_SCALE + seg.startY;
     const float fx = airGridX(absoluteX), fy = airGridY(absoluteY);
     const float depth = (140 + (uint16_t(particle.seed) >> 1)) / 256.0f;
-    const float pulse = gustFieldStrength(absoluteX, strip.now, wind.blowLeft, wind.activity, wind.tuning);
+    const float pulse = gustFieldStrength(absoluteX, strip.now, wind.blowLeft, wind.activity, wind.tuning, wind.gustMps);
     const float responseMs = pulse > 0 ? wind.tuning.responseMs : wind.tuning.settleMs;
     const float coupling = min(1.0f, deltaMs / responseMs * (0.8f + particle.seed / 640.0f));
     const float kick = (windBaseSpeed(wind.airGust) - windBaseSpeed(wind.airMean)) * pulse;

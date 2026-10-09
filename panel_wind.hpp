@@ -100,7 +100,7 @@ inline float airGridY(float panelY) { return panelY / max<uint16_t>(1, Segment::
 // The panel air at a panel pixel, in on-panel px/s: the resolved flow plus the
 // gust front passing that column, as the Wind particles feel it.
 inline void samplePanelAir(const WindInputs &wind, float x, float y, float &airX, float &airY) {
-  const float pulse = gustFieldStrength(x, strip.now, wind.blowLeft, wind.activity, wind.tuning);
+  const float pulse = gustFieldStrength(x, strip.now, wind.blowLeft, wind.activity, wind.tuning, wind.gustMps);
   const float kick = (windBaseSpeed(wind.airGust) - windBaseSpeed(wind.airMean)) * pulse;
   const float fx = airGridX(x), fy = airGridY(y);
   airX = flowSample(airField.flow.u, fx, fy) + (wind.blowLeft ? -kick : kick);

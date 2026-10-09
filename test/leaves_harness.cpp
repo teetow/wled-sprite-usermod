@@ -20,8 +20,8 @@ static void step(Segment &seg, uint32_t dt = 50) {
 
 static LeavesState &state(Segment &seg) { return *reinterpret_cast<LeavesState *>(seg.data); }
 
-// The spacing invariant as drawn: pairs of visible leaves on the same or
-// touching LEDs, diagonals included. Must always be zero.
+// Adjacent pairs are desirable now: measure them rather than forbidding
+// them. Persistent dense clumps are checked statistically below.
 static unsigned touchingLeaves(Segment &seg) {
   unsigned pairs = 0;
   const auto &leaves = state(seg).particles;
@@ -219,16 +219,19 @@ int main() {
   live = 0;
   for (auto &leaf : state(ground).particles) live += leaf.active;
   assert(live == 24);
-  assert(closeGroundPairs(ground) == 0);
+  assert(closeGroundPairs(ground) > 0);
   const uint32_t groundClock = strip.now;
+  unsigned initialClosePairs = 0;
   for (unsigned seed = 0; seed < 20; seed++) {
     strip.now = groundClock + seed * 1777;
     Segment spread(32, 6);
     spread.intensity = 255;
     spread.speed = spread.custom2 = 0;
     step(spread);
-    assert(closeGroundPairs(spread) <= 2);
+    initialClosePairs += closeGroundPairs(spread);
+    assert(closeGroundPairs(spread) < 30);
   }
+  assert(initialClosePairs > 80); // natural pairs, rather than farthest-point packing
   strip.now = groundClock;
   // Perspective derives both screen position and speed from physical depth.
   LeavesState projected{};
@@ -244,7 +247,7 @@ int main() {
   near.height = 2; projectGroundLeaf(projected, near);
   assert(near.y == 9 && near.depth == 1);
 
-  struct Metrics { double travel = 0, lateral = 0, population = 0, busiestRow = 0; unsigned moving = 0, rest = 0, lifted = 0, above = 0, samples = 0; float height = 0; };
+  struct Metrics { double travel = 0, lateral = 0, population = 0, busiestRow = 0; unsigned moving = 0, rest = 0, lifted = 0, above = 0, samples = 0, touching = 0; float height = 0; };
   auto scenario = [](uint8_t mean, uint8_t gust, uint8_t activity, bool left = false) {
     strip.now = 1000;
     Segment scene(32, 12);
@@ -257,7 +260,7 @@ int main() {
     double rows[12] = {}, grounded = 0;
     for (unsigned frame = 0; frame < 2400; frame++) {
       step(scene);
-      assert(touchingLeaves(scene) == 0);
+      metrics.touching += touchingLeaves(scene);
       for (const auto &leaf : state(scene).particles) if (leaf.active && leaf.height == 0) {
         const int row = int(floorf(leaf.y + 0.5f));
         if (row >= 6 && row < 12) { rows[row]++; grounded++; }
@@ -279,7 +282,7 @@ int main() {
     }
     // Returning to calm lets momentum and lifted leaves settle, then stops.
     scene.speed = scene.custom2 = 0;
-    for (unsigned frame = 0; frame < 500; frame++) { step(scene); assert(touchingLeaves(scene) == 0); }
+    for (unsigned frame = 0; frame < 500; frame++) step(scene);
     for (unsigned row = 6; row < 12; row++) metrics.busiestRow = max(metrics.busiestRow, rows[row] / max(1.0, grounded));
     for (const auto &leaf : state(scene).particles) if (leaf.active) {
       assert(leaf.height == 0);
@@ -288,6 +291,7 @@ int main() {
     // Leaves blown off the panel are gone for a while, so compare mean speed
     // per visible leaf rather than total distance across a varying population.
     metrics.population = metrics.samples / 2400.0;
+    assert(metrics.touching > 0 && metrics.touching / 2400.0 < 20);
     metrics.travel /= max(1U, metrics.samples) * 0.05;
     printf("ground %g/%g: speed %.2f px/s, population %.1f, resting %u, lifted %.2f%%, above horizon %.2f%%\n",
       mean / 10.0, gust / 10.0, metrics.travel, metrics.population, metrics.rest,
@@ -296,7 +300,7 @@ int main() {
   };
   const auto calm = scenario(0, 0, 0);
   const auto gustOnly = scenario(0, 255, 255);
-  assert(gustOnly.rest > gustOnly.moving && gustOnly.travel > 1);
+  assert(gustOnly.rest > 0 && gustOnly.moving > 0 && gustOnly.travel > 1);
   const auto light = scenario(10, 20, 26);
   const auto onset = scenario(30, 40, 45);
   const auto moderate = scenario(40, 70, 109);
@@ -329,7 +333,7 @@ int main() {
   assert(reversed.travel > windy.travel && reversed.above > 0);
 
   // The nominal tuning (the firmware defaults) still reads as leaves in the
-  // wind: litter moves at 8/14 m/s, and the spacing rule holds.
+  // wind: litter moves at 8/14 m/s with irregular neighbours.
   {
     stepTuning = DEFAULT_GUST_TUNING;
     strip.now = 1000;
@@ -340,13 +344,25 @@ int main() {
     double travel = 0;
     for (unsigned frame = 0; frame < 2400; frame++) {
       step(nominal);
-      assert(touchingLeaves(nominal) == 0);
       for (const auto &leaf : state(nominal).particles) if (leaf.active) travel += fabsf(leaf.vx) * 0.05;
     }
     printf("nominal tuning at 8/14: travel %.0f px\n", travel);
     assert(travel > 1000);
     stepTuning = referenceTuning();
   }
+
+  // Reported gusts must visibly change the nominal look at the SAME mean
+  // wind, rather than testing a gale with a much higher baseline too.
+  stepTuning = DEFAULT_GUST_TUNING;
+  const auto today = scenario(51, 115, 211);
+  const auto strong = scenario(51, 150, 255);
+  const auto storm = scenario(51, 200, 255);
+  printf("nominal 5.1 m/s: lifted %.2f%% / %.2f%% / %.2f%% at gusts 11.5 / 15 / 20\n",
+    lifted(today) * 100, lifted(strong) * 100, lifted(storm) * 100);
+  assert(lifted(strong) > lifted(today) * 2);
+  assert(lifted(storm) > lifted(strong) * 2 && lifted(storm) > 0.08);
+  assert(above(storm) > 0.03);
+  stepTuning = referenceTuning();
 
   // A leaf blown off the panel stays gone for a while instead of re-entering
   // upwind on the same frame. Its replacement may arrive anywhere.

@@ -31,3 +31,7 @@ g++ -std=c++17 -O1 -Wall -Wno-unused-function \
 g++ -std=c++17 -O1 -Wall -Wno-unused-function \
   -o "$OUT_DIR/cloud_deck_harness" "$TEST_DIR/cloud_deck_harness.cpp"
 "$OUT_DIR/cloud_deck_harness"
+
+g++ -std=c++17 -O1 -Wall -Wno-unused-function \
+  -o "$OUT_DIR/chaos_harness" "$TEST_DIR/chaos_harness.cpp"
+"$OUT_DIR/chaos_harness"

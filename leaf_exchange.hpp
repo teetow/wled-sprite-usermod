@@ -52,17 +52,11 @@ inline bool postLeafHandoff(LeafHandoff *queue, float x, float y, float vx, floa
   return false;
 }
 
-// Whether a leaf landing on this absolute LED would touch existing litter.
+// A landing reserves only its own LED; neighbouring litter may form small
+// clusters. This matches ground spawning and avoids a checkerboard of gaps.
 inline bool groundLandingFree(int x, int y) {
   const LeafExchange &exchange = leafExchange;
-  if (y < exchange.groundTop || y >= exchange.groundBottom) return false;
+  if (y < exchange.groundTop || y >= exchange.groundBottom || y < 0 || y >= int(LEAF_EXCHANGE_MAX_ROWS)) return false;
   if (x < exchange.groundLeft || x >= exchange.groundRight || x < 0 || x >= int(LEAF_EXCHANGE_MAX_COLUMNS)) return false;
-  for (int row = y - 1; row <= y + 1; row++) {
-    if (row < 0 || row >= int(LEAF_EXCHANGE_MAX_ROWS)) continue;
-    const uint64_t lit = exchange.groundLit[row];
-    for (int column = x - 1; column <= x + 1; column++) {
-      if (column >= 0 && column < int(LEAF_EXCHANGE_MAX_COLUMNS) && (lit >> column & 1U)) return false;
-    }
-  }
-  return true;
+  return !(exchange.groundLit[y] >> x & 1U);
 }

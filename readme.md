@@ -215,6 +215,10 @@ panel columns. Weak gusts are brief and rare; stronger gustiness brings more
 frequent, irregular surges with quick attacks and uneven kicks. Fronts travel
 downwind at 10 pixels/s; reversing the bearing reverses the front. Gustiness
 is derived from both absolute peak speed and excess over sustained wind.
+Physical gust peaks from 10 to 20 m/s progressively lengthen fronts (up to
+3.5 times the nominal duration), slightly increase their frequency and retain
+stronger crests. Larger, stronger vortices build during those fronts and leave
+decaying wakes. All moving layers use this same physical gust ceiling.
 
 Neoblaster sets `gust_tuning` from three autosaving editor sliders (spacing,
 duration and roughness) and holds attack, response and settling at the
@@ -302,22 +306,19 @@ is based on ground area only, excluding the reserved sky. Each leaf has a
 world position, depth, velocity, drag, static friction and separate lift height.
 Perspective projects near leaves three times faster than distant ones; movement
 through depth changes both screen row and scale. Leaves occupy one LED each.
-Spacing is a hard rule: no two visible leaves ever share or touch an LED,
-diagonals included, so litter can never draw a solid streak. Every placement
-and every move is checked. A blocked leaf glances off one row in depth or
-stops short; a resting leaf is never pushed by a neighbour, and an airborne
-leaf with nowhere to land drifts sideways until a gap opens. Before contact,
-moving leaves steer around neighbours within 3.5 LEDs, and each leaf carries
-its own flutter, small-scale turbulence the 16×8 grid cannot resolve, so
-neighbours do not travel in lockstep convoys. Depth flutter is sized in screen
-rows, and the band's top and bottom edges reflect leaves and push back gently,
-so litter spreads evenly across rows instead of lining the horizon. Moving
-litter keeps a Clark–Evans ratio of about 1.25–1.55 (1.0 is uniform random).
+Litter starts at uniformly random free LEDs; adjacent pairs and small clumps
+are welcome. Motion allows temporary overlaps and never snaps a blocked leaf
+into a grid or resets its velocity. Weak nudges within roughly 0.7–1.25 LEDs
+vary with each leaf's seed and ease sustained overlap without imposing a
+minimum pixel spacing. Each leaf also carries its own correlated flutter,
+small-scale turbulence the 16×8 grid cannot resolve, so neighbours do not
+travel in lockstep convoys. Depth flutter is sized in screen rows, and the
+band's depth edges reflect leaves so they do not stick to the horizon.
 
 Nothing wraps: a leaf blown off the panel is gone. A different leaf arrives
 0.5–4 seconds later. Once wind can move litter (mean or gust of at least 3 m/s),
 about two thirds of arrivals blow in from the upwind edge, on the free entry
-row farthest from nearby litter; the rest, and every arrival in calm air, fade
+row chosen in random order; the rest, and every arrival in calm air, fade
 in at an open spot. Strong wind thins the visible litter somewhat: around 14 of
 24 leaves at 8 m/s, 10 in a 15 m/s gale.
 
@@ -332,6 +333,8 @@ under 5 KB per segment. Shedding retains its canopy lifecycle and ignores wind.
 The canopy template and coordinate hash in `leaves_effect.hpp` mirror
 Neoblaster's `src/tree.ts`; update both if the tree silhouette changes.
 `test/leaves_harness.cpp` exercises the shipped effect with a deterministic clock.
+`test/chaos_harness.cpp` compares nominal 11.5, 15 and 20 m/s gusts at the same
+5.1 m/s mean, in both directions, with ground/air hand-offs and cluster checks.
 Discovery reports `info.sprite_usermod.leaves_fxid`.
 
 ## Cloud Deck controls

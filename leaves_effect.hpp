@@ -24,13 +24,11 @@ constexpr float LEAF_FLUTTER_X = 0.35f;
 constexpr float LEAF_FLUTTER_ROWS = 0.12f; // rows/s per unit of air speed
 // Soft separation between moving leaves: reach in LEDs, and peak steering
 // speed in LEDs per second.
-constexpr float LEAF_AVOID_RADIUS = 3.5f;
-constexpr float LEAF_AVOID_STRENGTH = 2.0f;
+constexpr float LEAF_AVOID_RADIUS = 1.25f;
+constexpr float LEAF_AVOID_STRENGTH = 0.7f;
 // A rising leaf this many rows clear of the horizon is handed to the airborne
 // Wind layer, when that layer is running and has room.
 constexpr float LEAF_LIFT_HANDOFF_ROWS = 2.0f;
-// Sideways drift of an airborne leaf that has no free spot to land on.
-constexpr float LEAF_DRIFT_LEDS_PER_SECOND = 2.0f;
 
 struct LeafParticle {
   float x, y, sourceY;
@@ -147,31 +145,15 @@ inline bool leafPixel(const LeavesState &state, const LeafParticle &leaf, int &p
   return px >= 0 && py >= 0 && px < state.width && py < state.height;
 }
 
-// The spacing invariant: no two visible ground leaves share or touch an LED,
-// diagonals included. Every placement and every move is checked against it,
-// so a pile-up can never draw a solid streak.
+// New litter needs a free LED, but adjacent leaves and small clumps are
+// welcome. Motion never snaps to a pixel grid or stops at a neighbour.
 bool leafPixelFree(const LeavesState &state, const LeafParticle &self, int px, int py) {
   for (const LeafParticle &other : state.particles) {
     if (!other.active || &other == &self) continue;
     int ox, oy;
-    if (leafPixel(state, other, ox, oy) && abs(ox - px) < 2 && abs(oy - py) < 2) return false;
+    if (leafPixel(state, other, ox, oy) && ox == px && oy == py) return false;
   }
   return true;
-}
-
-// Squared distance to the nearest visible leaf, or -1 when the LED would
-// break the spacing invariant. With only a few leaves, different rows must
-// not excuse matching columns.
-float groundCandidateDistance(const LeavesState &state, const LeafParticle &leaf,
-                              float target, int x, int y) {
-  if (!leafPixelFree(state, leaf, x, y)) return -1.0f;
-  float nearest = 1.0e9f;
-  for (const LeafParticle &other : state.particles) {
-    if (!other.active || &other == &leaf) continue;
-    const float dx = x - other.x, dy = y - other.y;
-    nearest = min(nearest, dx * dx + (target <= 8.0f ? 0.0f : dy * dy));
-  }
-  return nearest;
 }
 
 void placeGroundLeaf(LeavesState &state, LeafParticle &leaf, float x, uint16_t row) {
@@ -185,48 +167,33 @@ void placeGroundLeaf(LeavesState &state, LeafParticle &leaf, float x, uint16_t r
   leaf.active = true;
 }
 
-bool spawnGroundLeaf(LeavesState &state, LeafParticle &leaf, float target) {
-  // Best-candidate blue noise: place each new leaf as far as possible from
-  // visible litter. A fixed set of random candidates keeps this cheap; when
-  // none satisfies the spacing invariant the leaf waits and tries again.
-  float bestDistance = -1.0f;
-  uint16_t bestX = 0, bestY = 0;
-  for (unsigned trial = 0; trial < 24; trial++) {
+// Uniform random proposals preserve gaps and occasional pairs instead of
+// maximizing distance, which arranged litter into a regular marching grid.
+bool spawnGroundLeaf(LeavesState &state, LeafParticle &leaf) {
+  for (unsigned trial = 0; trial < 12; trial++) {
     const uint16_t x = leafRandom(state, state.width);
     const uint16_t y = state.groundTop + leafRandom(state, state.height - state.groundTop);
-    const float nearest = groundCandidateDistance(state, leaf, target, x, y);
-    if (nearest > bestDistance) {
-      bestDistance = nearest;
-      bestX = x;
-      bestY = y;
-    }
-    if (nearest == 1.0e9f) break; // the first leaf remains uniformly random
+    if (!leafPixelFree(state, leaf, x, y)) continue;
+    placeGroundLeaf(state, leaf, x + leafRandom(state, 64) / 256.0f, y);
+    return true;
   }
-  if (bestDistance < 0) return false;
-  placeGroundLeaf(state, leaf, bestX + leafRandom(state, 64) / 256.0f, bestY);
-  return true;
+  return false;
 }
 
-// Carried in from upwind: the entry row is the free one farthest from the
-// litter already near that edge, so arrivals do not queue up in one row.
-bool enterGroundLeafFromEdge(LeavesState &state, LeafParticle &leaf, float target, bool blowLeft) {
+// Randomize arrival depth too; selecting the most isolated row created queues
+// at evenly separated entry lanes.
+bool enterGroundLeafFromEdge(LeavesState &state, LeafParticle &leaf, bool blowLeft) {
   const unsigned rows = state.height - state.groundTop;
-  const unsigned offset = leafRandom(state, rows); // random order breaks ties
+  const unsigned offset = leafRandom(state, rows);
   const int column = blowLeft ? state.width - 1 : 0;
-  float bestDistance = -1.0f;
-  uint16_t bestRow = 0;
   for (unsigned i = 0; i < rows; i++) {
     const uint16_t row = state.groundTop + (i + offset) % rows;
-    const float nearest = groundCandidateDistance(state, leaf, target, column, row);
-    if (nearest > bestDistance) {
-      bestDistance = nearest;
-      bestRow = row;
-    }
+    if (!leafPixelFree(state, leaf, column, row)) continue;
+    placeGroundLeaf(state, leaf, blowLeft ? state.width - 0.51f : -0.49f, row);
+    leaf.age = LEAF_GROUND_FADE_MS;
+    return true;
   }
-  if (bestDistance < 0) return false;
-  placeGroundLeaf(state, leaf, blowLeft ? state.width - 0.51f : -0.49f, bestRow);
-  leaf.age = LEAF_GROUND_FADE_MS; // already fully visible as it crosses the edge
-  return true;
+  return false;
 }
 
 // A leaf blown off the panel is gone; nothing wraps. A different leaf arrives
@@ -237,106 +204,32 @@ void retireGroundLeaf(LeavesState &state, LeafParticle &leaf) {
   leaf.wait = LEAF_RETURN_MIN_MS + leafRandom(state, LEAF_RETURN_SPAN_MS + 1);
 }
 
-bool arriveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg, float target) {
+bool arriveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg) {
   // Initial litter and calm-weather arrivals settle in place. Once wind can
   // move litter, most arrivals are carried in from upwind at a fresh depth.
   const bool carried = leaf.stage == 1 && state.wind.gustMps >= 3.0f
     && leafRandom(state, 100) < 65;
-  if (carried && enterGroundLeafFromEdge(state, leaf, target, state.wind.blowLeft)) return true;
-  if (spawnGroundLeaf(state, leaf, target)) return true;
+  if (carried && enterGroundLeafFromEdge(state, leaf, state.wind.blowLeft)) return true;
+  if (spawnGroundLeaf(state, leaf)) return true;
   leaf.wait = 250 + leafRandom(state, 501); // no free spot yet; retry shortly
   return false;
 }
 
-// Enforce the spacing invariant for one move. The mover yields: it glances
-// off one row in depth, or else stays where it was and loses its speed. A
-// neighbour never displaces a resting leaf. An airborne leaf may also slide
-// one or two LEDs along the panel, so it can always come down beside a
-// resting leaf. When every nearby landing spot is taken, it holds its
-// height and drifts along the panel until a gap opens below it.
-void keepGroundLeafSpacing(LeavesState &state, LeafParticle &leaf, const LeafParticle &before, float seconds) {
-  int px, py;
-  if (!leafPixel(state, leaf, px, py) || leafPixelFree(state, leaf, px, py)) return;
-  int bx, by;
-  // Should the invariant somehow be broken already, never freeze a leaf.
-  if (leafPixel(state, before, bx, by) && !leafPixelFree(state, leaf, bx, by)) return;
-  const int depthSide = leaf.vy > 0 ? 1 : leaf.vy < 0 ? -1 : (leaf.seed & 1 ? 1 : -1);
-  const int along = leaf.vx < 0 ? -1 : 1;
-  const int airborne = leaf.height > 0;
-  const struct { int rows, columns; } moves[] = {
-    {depthSide, 0}, {-depthSide, 0},
-    {0, along * airborne}, {0, -along * airborne}, {0, 2 * along * airborne}, {0, -2 * along * airborne},
-  };
-  for (const auto &move : moves) {
-    if (move.rows == 0 && move.columns == 0) continue;
-    LeafParticle trial = leaf;
-    if (move.rows && !airborne) {
-      const int row = py + move.rows;
-      if (row < state.groundTop || row >= state.height) continue;
-      trial.depth = groundDepthForRow(state, row);
-    } else if (move.rows) {
-      trial.depth = flowClamp(trial.depth + move.rows * groundDepthPerRow(state, trial.depth) / 24.0f, 0, 1);
-    }
-    trial.worldX += move.columns / leafPerspective(trial.depth);
-    projectGroundLeaf(state, trial);
-    int tx, ty;
-    if (trial.x < -0.5f || trial.x >= state.width - 0.5f) continue;
-    if (!leafPixel(state, trial, tx, ty)) { if (airborne) { leaf = trial; return; } continue; }
-    if ((tx != px || ty != py) && leafPixelFree(state, leaf, tx, ty)) {
-      leaf.worldX = trial.worldX;
-      leaf.depth = trial.depth;
-      leaf.x = trial.x;
-      leaf.y = trial.y;
-      return;
-    }
-  }
-  leaf.worldX = before.worldX;
-  leaf.depth = before.depth;
-  leaf.height = before.height;
-  leaf.x = before.x;
-  leaf.y = before.y;
-  leaf.vx = leaf.vy = leaf.vz = 0;
-  if (!airborne) return;
-  const int drift = leaf.seed & 1 ? 1 : -1; // a fixed side per leaf, so it does not dither
-  for (const int side : {drift, -drift}) {
-    LeafParticle trial = leaf;
-    trial.worldX += side * LEAF_DRIFT_LEDS_PER_SECOND * seconds / leafPerspective(trial.depth);
-    projectGroundLeaf(state, trial);
-    int tx, ty;
-    if (trial.x < -0.5f || trial.x >= state.width - 0.5f) continue;
-    if (leafPixel(state, trial, tx, ty) && !leafPixelFree(state, leaf, tx, ty)) continue;
-    leaf.worldX = trial.worldX;
-    leaf.x = trial.x;
-    return;
-  }
-}
-
-// Soft separation: a moving leaf steers around visible neighbours within a
-// few LEDs, slowing as it closes in and turning through depth to pass. This
-// keeps flowing litter spaced like Poisson-disc samples; the hard spacing
-// rule above only catches what this misses. Returns world-X and depth
-// velocities. Same-row neighbours are passed on a side chosen per leaf.
+// Weak, short-range nudges ease sustained overlap without imposing a
+// minimum visible spacing. Each leaf has its own reach, so close encounters
+// do not settle into an evenly spaced convoy. Collisions may pass through.
 void groundLeafAvoidance(const LeavesState &state, const LeafParticle &leaf, float &awayX, float &awayDepth) {
   float screenX = 0, screenY = 0;
+  const float radius = LEAF_AVOID_RADIUS * (0.55f + leaf.seed / 567.0f);
   for (const LeafParticle &other : state.particles) {
     if (!other.active || &other == &leaf) continue;
     const float dx = leaf.x - other.x, dy = leaf.y - other.y;
     const float distance = sqrtf(dx * dx + dy * dy);
-    if (distance >= LEAF_AVOID_RADIUS) continue;
-    const float push = (LEAF_AVOID_RADIUS - distance) / LEAF_AVOID_RADIUS;
+    if (distance >= radius) continue;
+    const float push = (radius - distance) / radius;
     screenX += push * (distance > 0.01f ? dx / distance : 0.0f);
     const float side = fabsf(dy) > 0.3f ? dy / max(distance, 0.01f) : (leaf.seed & 1 ? 1.0f : -1.0f);
     screenY += push * side;
-  }
-  // The band's top and bottom edges push back like mirrored neighbours, at
-  // half strength. Without them, a leaf by an edge is only pushed from
-  // inside and the edge rows collect litter; at full strength the rows just
-  // inside the edges do.
-  const float edges[2] = {state.groundTop - 0.5f, state.height - 0.5f};
-  for (const float edge : edges) {
-    const float distance = 2 * fabsf(leaf.y - edge);
-    if (distance >= LEAF_AVOID_RADIUS) continue;
-    screenY += 0.5f * (LEAF_AVOID_RADIUS - distance) / LEAF_AVOID_RADIUS * (leaf.y > edge ? 1.0f : -1.0f);
   }
   awayX = LEAF_AVOID_STRENGTH * screenX / leafPerspective(leaf.depth);
   awayDepth = LEAF_AVOID_STRENGTH * screenY * groundDepthPerRow(state, leaf.depth);
@@ -345,10 +238,9 @@ void groundLeafAvoidance(const LeavesState &state, const LeafParticle &leaf, flo
 void moveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg, float seconds) {
   const WindInputs &wind = state.wind;
   const GustTuning &tuning = wind.tuning;
-  const LeafParticle before = leaf;
   const float fx = (leaf.worldX + state.width) / (state.width * 3.0f) * FLOW_WIDTH - 0.5f;
   const float fy = leaf.depth * FLOW_HEIGHT - 0.5f;
-  const float pulse = gustFieldStrength(leaf.x + seg.start, strip.now, wind.blowLeft, wind.activity, tuning);
+  const float pulse = gustFieldStrength(leaf.x + seg.start, strip.now, wind.blowLeft, wind.activity, tuning, wind.gustMps);
   const float meanMps = wind.meanMps, gustMps = wind.gustMps;
   const float kick = (groundFlowSpeed(gustMps) - groundFlowSpeed(meanMps)) * pulse;
   float airX = flowSample(state.flow.u, fx, fy) + (wind.blowLeft ? -kick : kick);
@@ -418,7 +310,6 @@ void moveGroundLeaf(LeavesState &state, LeafParticle &leaf, const Segment &seg, 
       return;
     }
   }
-  keepGroundLeafSpacing(state, leaf, before, seconds);
 }
 
 // Airborne leaves that came down over the ground band settle as litter, fully
@@ -538,7 +429,7 @@ void renderLeavesToSegment(Segment &seg, const WindInputs &wind) {
     }
     if (!state.shedding && !leaf.active) {
       if (leaf.wait > dt) { leaf.wait -= dt; continue; }
-      arriveGroundLeaf(state, leaf, seg, target);
+      arriveGroundLeaf(state, leaf, seg);
     }
     if (!leaf.active) continue;
     leaf.age = state.shedding ? leaf.age + (spawnedNow ? 0 : dt)
