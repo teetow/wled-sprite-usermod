@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 /path/to/WLED [pio-env] [--channel stable|nightly] [--deploy-host HOST] [--skip-build]" >&2
+  echo "Usage: $0 /path/to/WLED [pio-env] [--base-ref LOCAL_REF] [--channel stable|nightly] [--deploy-host HOST] [--skip-build]" >&2
 }
 
 if [[ $# -eq 1 && ( $1 == -h || $1 == --help ) ]]; then
@@ -23,6 +23,7 @@ PIO_ENV=esp32dev
 CHANNEL=stable
 DEPLOY_HOST=
 SKIP_BUILD=false
+BASE_REF_OVERRIDE=
 
 if [[ $# -gt 0 && $1 != --* ]]; then
   PIO_ENV=$1
@@ -31,6 +32,10 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --base-ref)
+      BASE_REF_OVERRIDE=${2:?--base-ref requires a local ref}
+      shift 2
+      ;;
     --channel)
       if [[ $# -lt 2 ]]; then
         usage
@@ -91,6 +96,7 @@ ALT_CONF=platformio.sprite.ini
 ALT_ENV=${PIO_ENV}_sprite_usermod
 PATCH_FILE="$USERMOD_DIR/patches/wled-alpha-over.patch"
 HOLDOUT_PATCH_FILE="$USERMOD_DIR/patches/wled-holdout-one-shot.patch"
+INK_PATCH_FILE="$USERMOD_DIR/patches/wled-contrast-ink.patch"
 OUTPUT_DIR="$USERMOD_DIR/.build/$CHANNEL/$PIO_ENV"
 FIRMWARE_OUTPUT="$OUTPUT_DIR/firmware.bin"
 USERMOD_PATH=$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$USERMOD_DIR")
@@ -188,6 +194,8 @@ deploy_firmware() {
 
   local pre_uptime
   pre_uptime=$(curl -fsS --max-time 10 "http://$host/json/info" 2>/dev/null | json_field uptime || true)
+  local preserved_power
+  preserved_power=$(curl -fsS --max-time 10 "http://$host/json/state" | python3 -c 'import json,sys; s=json.load(sys.stdin); print(json.dumps({"on":s["on"],"bri":s["bri"],"tt":0}))')
 
   echo "Uploading firmware to $host..."
   local response
@@ -207,6 +215,7 @@ deploy_firmware() {
       local post_uptime ready
       post_uptime=$(printf '%s' "$post_info" | json_field uptime)
       if [[ -n $post_uptime ]] && { [[ -z $pre_uptime ]] || (( post_uptime < pre_uptime )); }; then
+        curl -fsS --max-time 10 -H 'Content-Type: application/json' -d "$preserved_power" "http://$host/json/state" >/dev/null
         ready=$(printf '%s' "$post_info" | json_field sprite_usermod.ready)
         ready=${ready,,}
         if [[ $ready != true ]]; then
@@ -232,11 +241,11 @@ if [[ $SKIP_BUILD == false ]]; then
     exit 1
   fi
 
-  if [[ $CHANNEL == stable ]]; then
-    BASE_REF=$(resolve_stable_ref) || {
-      echo "Could not resolve the latest stable WLED tag." >&2
-      exit 1
-    }
+  if [[ -n $BASE_REF_OVERRIDE ]]; then
+    BASE_REF=$BASE_REF_OVERRIDE
+  elif [[ $CHANNEL == stable ]]; then
+    # Personal panel builds stay on the reviewed stable tag, without fetching.
+    BASE_REF=v16.0.1
   else
     BASE_REF=$(resolve_nightly_ref)
   fi
@@ -270,6 +279,10 @@ if [[ $SKIP_BUILD == false ]]; then
     exit 1
   fi
   git -C "$BUILD_WLED_DIR" apply "$HOLDOUT_PATCH_FILE"
+  git -C "$BUILD_WLED_DIR" apply --check "$INK_PATCH_FILE"
+  git -C "$BUILD_WLED_DIR" apply "$INK_PATCH_FILE"
+  cp "$USERMOD_DIR/contrast_ink.hpp" "$BUILD_WLED_DIR/wled00/contrast_ink.hpp"
+  git -C "$BUILD_WLED_DIR" apply "$USERMOD_DIR/patches/wled-cdata-test-timing.patch"
 
   PLATFORMIO_INI="$BUILD_WLED_DIR/platformio.ini"
   ALT_CONF_PATH="$BUILD_WLED_DIR/$ALT_CONF"
@@ -291,6 +304,9 @@ if [[ $SKIP_BUILD == false ]]; then
   } >> "$ALT_CONF_PATH"
 
   cd "$BUILD_WLED_DIR"
+  npm ci
+  npm run build
+  npm test
   "${PLATFORMIO_COMMAND[@]}" run -c "$ALT_CONF" -e "$ALT_ENV"
 
   FIRMWARE_PATH="$BUILD_WLED_DIR/.pio/build/$ALT_ENV/firmware.bin"
@@ -321,6 +337,8 @@ if [[ $SKIP_BUILD == false ]]; then
     printf '  "usermod_dirty": %s,\n' "$USERMOD_DIRTY"
     printf '  "patch_sha": "%s",\n' "$PATCH_SHA"
     printf '  "holdout_patch_sha": "%s",\n' "$HOLDOUT_PATCH_SHA"
+    printf '  "contrast_patch_sha": "%s",\n' "$(git hash-object "$INK_PATCH_FILE")"
+    printf '  "firmware_sha256": "%s",\n' "$(sha256sum "$FIRMWARE_OUTPUT" | cut -d ' ' -f 1)"
     printf '  "pio_environment": "%s",\n' "$PIO_ENV"
     printf '  "built_at": "%s"\n' "$BUILT_AT"
     printf '}\n'

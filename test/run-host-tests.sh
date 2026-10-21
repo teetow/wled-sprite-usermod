@@ -7,6 +7,10 @@ TEST_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 OUT_DIR=${TMPDIR:-/tmp}/wled-sprite-usermod-tests
 mkdir -p "$OUT_DIR"
 
+g++ -std=c++17 -O1 -Wall -include initializer_list \
+  -o "$OUT_DIR/contrast_ink_harness" "$TEST_DIR/contrast_ink_harness.cpp"
+"$OUT_DIR/contrast_ink_harness"
+
 g++ -std=c++17 -O1 -Wall -Wno-unused-function \
   -o "$OUT_DIR/wind_harness" "$TEST_DIR/wind_harness.cpp"
 

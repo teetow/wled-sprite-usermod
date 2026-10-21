@@ -17,6 +17,22 @@
   coverage opens or closes its gaps, in front of the sun, moon and stars and
   behind the cloud sprites.
 
+The local compatibility patches also add **Contrast Ink** (`bm=19`) for
+stable-color text. A four-connected glyph boundary gets an ink/ivory support
+pixel only where the already-composed background falls below 5:1 diagnostic
+contrast. Glyphs keep their chosen color and have no offset echo. This mode
+uses an untransformed, ungrouped 2D segment at full opacity; Neoblaster sends
+those settings explicitly. `/json/info` advertises `contrast_ink_blend` so older
+hosts and firmware can fall back to a conventional backing. This is screen-RGB
+contrast, not a measurement of emitted LED light.
+
+`build-local.sh` now defaults stable builds to local `v16.0.1`; `--base-ref REF`
+selects another reviewed local commit without fetching. It applies the alpha,
+holdout, contrast-ink, and existing local cdata timestamp-test fixes in an
+isolated worktree, runs the web build/tests, then PlatformIO. OTA deployment
+restores the panel's pre-reboot power and brightness. The WLED checkout's
+pre-existing editor/task and test edits are left untouched.
+
 ## Supported targets
 
 - ESP32 only

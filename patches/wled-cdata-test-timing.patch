@@ -1,0 +1,45 @@
+diff --git a/tools/cdata-test.js b/tools/cdata-test.js
+index 6f27fb71..a63d809d 100644
+--- a/tools/cdata-test.js
++++ b/tools/cdata-test.js
+@@ -117,9 +117,10 @@ describe('Script', () => {
+     await checkIfBuiltFilesExist();
+   }
+ 
+-  async function checkIfFileWasNewlyCreated(file) {
++  async function checkIfFileWasNewlyCreated(file, buildStarted) {
+     const modifiedTime = fs.statSync(file).mtimeMs;
+-    assert(Date.now() - modifiedTime < 500, file + ' was not modified');
++    // Other headers can take seconds to finish after this file was written.
++    assert(modifiedTime >= buildStarted, file + ' was not modified');
+   }
+ 
+   async function testFileModification(sourceFilePath, resultFile) {
+@@ -132,9 +133,10 @@ describe('Script', () => {
+     await new Promise(resolve => setTimeout(resolve, 1000));
+ 
+     // run script cdata.js again and wait for it to finish
++    const buildStarted = Date.now();
+     await execPromise('node tools/cdata.js');
+ 
+-    await checkIfFileWasNewlyCreated(path.join(folderPath, resultFile));
++    await checkIfFileWasNewlyCreated(path.join(folderPath, resultFile), buildStarted);
+   }
+ 
+   describe('should build if', () => {
+@@ -159,11 +161,13 @@ describe('Script', () => {
+     it('script was executed with -f or --force', async () => {
+       await execPromise('node tools/cdata.js');
+       await new Promise(resolve => setTimeout(resolve, 1000));
++      let buildStarted = Date.now();
+       await execPromise('node tools/cdata.js --force');
+-      await checkIfFileWasNewlyCreated(path.join(folderPath, 'html_ui.h'));
++      await checkIfFileWasNewlyCreated(path.join(folderPath, 'html_ui.h'), buildStarted);
+       await new Promise(resolve => setTimeout(resolve, 1000));
++      buildStarted = Date.now();
+       await execPromise('node tools/cdata.js -f');
+-      await checkIfFileWasNewlyCreated(path.join(folderPath, 'html_ui.h'));
++      await checkIfFileWasNewlyCreated(path.join(folderPath, 'html_ui.h'), buildStarted);
+     });
+ 
+     it('a file changes', async () => {
