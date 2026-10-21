@@ -298,6 +298,8 @@ if [[ $SKIP_BUILD == false ]]; then
   {
     printf '\n[env:%s]\n' "$ALT_ENV"
     printf 'extends = env:%s\n' "$PIO_ENV"
+    printf 'build_flags = ${env:%s.build_flags}\n' "$PIO_ENV"
+    printf '  -D NEOBLASTER_CONTRAST_INK=19\n'
     printf 'custom_usermods =\n'
     printf '  ${env:%s.custom_usermods}\n' "$PIO_ENV"
     printf '  %s\n' "$USERMOD_SPEC"

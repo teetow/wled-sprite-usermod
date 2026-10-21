@@ -140,7 +140,9 @@ void addSpriteInfo(JsonObject &root) {
   spriteInfo[F("wind_fxid")] = windEffectId;
   spriteInfo[F("leaves_fxid")] = leavesEffectId;
   spriteInfo[F("cloud_deck_fxid")] = cloudDeckEffectId;
-  spriteInfo[F("contrast_ink_blend")] = 19;
+#ifdef NEOBLASTER_CONTRAST_INK
+  spriteInfo[F("contrast_ink_blend")] = NEOBLASTER_CONTRAST_INK;
+#endif
   spriteInfo[F("mode")] = F("cache");
   spriteInfo[F("cache_generation")] = spriteCacheGeneration;
   spriteInfo[F("budget")] = SPRITE_CACHE_BUDGET;
