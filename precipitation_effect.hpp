@@ -280,6 +280,9 @@ void drawPrecipitationParticle(Segment &seg, const PrecipitationParticle &partic
     const uint8_t progress = (uint16_t(age) * 255U) / ttl;
     const uint8_t fade = 255 - progress;
 
+    // Tail first: alpha-over writes replace pixels, so drawing the darker tail
+    // last would erase the bright central splash droplet where they overlap.
+    drawPrecipitationTrail(seg, particle, headX, headY, trailLength, depthAlpha, fade);
     static const int8_t SPLASH_VX[3] = { -1, 0, 1 };
     for (uint8_t i = 0; i < 3; i++) {
       const uint8_t peak = 1 + uint8_t(i == 1 && seg.custom1 >= 128 && particle.seed >= 128);
@@ -295,9 +298,6 @@ void drawPrecipitationParticle(Segment &seg, const PrecipitationParticle &partic
     if (progress < 64) drawPrecipitationPixel(seg, headX, headY, SEGCOLOR(0), depthAlpha);
     // AI: end
 
-    // Keep the trail alive during the splash window, fading with splash age,
-    // so the drop doesn't visually pop out of existence at the moment of impact.
-    drawPrecipitationTrail(seg, particle, headX, headY, trailLength, depthAlpha, fade);
     return;
   }
 

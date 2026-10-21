@@ -84,6 +84,8 @@ int main() {
     Segment impact = makeRain(false);
     impact.blendMode = 17;
     impact.custom1 = 128;
+    impact.custom3 = 4;
+    impact.colors[1] = RGBW32(53, 73, 90, 0);
     currentSegment = &impact;
     PrecipitationState state{};
     state.width = 32; state.height = 16;
@@ -100,6 +102,11 @@ int main() {
       for (unsigned y = 12; y <= 15; y++) for (unsigned x = 14; x <= 18; x++) visible += impact.lit(x, y);
       assert(visible >= 2);
     }
+    impact.fill(BLACK);
+    p.age = p.ttl / 2;
+    drawPrecipitationParticle(impact, p);
+    assert(R(impact.pixel(16, 13)) == R(impact.colors[0]));
+    assert(W(impact.pixel(16, 13)) > 100); // The trail must not replace the bright center.
     PrecipitationParticle far = p, near = p;
     far.seed = 0; near.seed = 255;
     updatePrecipitationMotion(far, impact);
