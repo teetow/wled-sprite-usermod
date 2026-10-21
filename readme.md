@@ -18,7 +18,7 @@
   behind the cloud sprites.
 
 The local compatibility patches also add **Contrast Ink** (`bm=19`) for
-stable-color text. A four-connected glyph boundary gets an ink/ivory support
+stable-color text. A reading-field glyph boundary gets an ink/ivory support
 pixel only where the already-composed background falls below 5:1 diagnostic
 contrast. Glyphs keep their chosen color and have no offset echo. This mode
 uses an untransformed, ungrouped 2D segment at full opacity; Neoblaster sends

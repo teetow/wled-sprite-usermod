@@ -16,7 +16,19 @@ int main() {
       cases++;
     }
   }
-  puts("Contrast ink: 8192 foreground/background cases passed");
+  for (const uint32_t foreground : {0x00101827U, 0x00FFF1D2U}) {
+    uint32_t previous = neoblasterInk::protect(foreground, 0);
+    for (unsigned v = 1; v < 256; v++) {
+      const uint32_t color = (v << 16) | (v << 8) | v;
+      const uint32_t current = neoblasterInk::protect(foreground, color);
+      for (unsigned shift = 0; shift <= 16; shift += 8) {
+        const int delta = int((current >> shift) & 255) - int((previous >> shift) & 255);
+        assert(delta >= -4 && delta <= 4); // no appearance/disappearance of a bright contour
+      }
+      previous = current;
+    }
+  }
+  puts("Contrast ink: 8192 backgrounds and continuous gray ramps passed");
   assert(cases == 8192);
 }
 // AI: end
