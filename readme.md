@@ -18,9 +18,10 @@
   behind the cloud sprites.
 
 The local compatibility patches also add **Contrast Ink** (`bm=19`) for
-stable-color text. A reading-field glyph boundary gets an ink/ivory support
-pixel only where the already-composed background falls below 5:1 diagnostic
-contrast. Glyphs keep their chosen color and have no offset echo. This mode
+stable-color text. The complete reading field receives the minimum continuous
+color grade needed for 5:1 diagnostic contrast against the composed scene.
+Glyphs keep their chosen color; there are no appearing/disappearing outline
+pixels. This mode
 uses an untransformed, ungrouped 2D segment at full opacity; Neoblaster sends
 those settings explicitly. `/json/info` advertises `contrast_ink_blend` so older
 hosts and firmware can fall back to a conventional backing. This is screen-RGB
