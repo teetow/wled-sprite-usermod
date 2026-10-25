@@ -281,6 +281,8 @@ if [[ $SKIP_BUILD == false ]]; then
   git -C "$BUILD_WLED_DIR" apply "$HOLDOUT_PATCH_FILE"
   git -C "$BUILD_WLED_DIR" apply --check "$INK_PATCH_FILE"
   git -C "$BUILD_WLED_DIR" apply "$INK_PATCH_FILE"
+  git -C "$BUILD_WLED_DIR" apply --check "$USERMOD_DIR/patches/wled-rounded-output.patch"
+  git -C "$BUILD_WLED_DIR" apply "$USERMOD_DIR/patches/wled-rounded-output.patch"
   cp "$USERMOD_DIR/contrast_ink.hpp" "$BUILD_WLED_DIR/wled00/contrast_ink.hpp"
   git -C "$BUILD_WLED_DIR" apply "$USERMOD_DIR/patches/wled-cdata-test-timing.patch"
 
