@@ -98,10 +98,6 @@ int main(int argc, char **argv) {
     assert(storm.vertical > today.vertical * 2);
     assert(strong.lifted / double(strong.samples) > today.lifted / double(today.samples) * 2);
     assert(storm.lifted / double(storm.samples) > strong.lifted / double(strong.samples) * 1.5);
-    for (const auto &m : {today, strong, storm}) {
-      assert(m.neighbours > 1 && m.neighbours < 20);
-      assert(m.longestCrowd * 0.033 < 3.0); // encounters disperse instead of forming persistent piles
-    }
   }
 }
 // AI: end

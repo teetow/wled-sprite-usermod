@@ -299,7 +299,7 @@ blending (17). Neoblaster owns calendar activation, snow suppression and colors.
 | --- | --- |
 | Color 1–3 | Tree autumn palette: yellow, red, brown |
 | Speed | Sustained physical wind in tenths of m/s: 40 means 4 m/s, 150 means 15 m/s |
-| Intensity | Ground density, up to one leaf per eight pixels, capped at 32; shedding mode uses it as opacity |
+| Intensity | Ground density, up to one leaf per five pixels, capped at 48; shedding mode uses it as opacity |
 | Custom 1 | Shedding: remaining tree foliage, 0–255. Ground: shared gust activity, 0–255 |
 | Custom 2 | Ground: physical gust peak in tenths of m/s. Shedding: seasonal taper, 0 at peak through 255 to stop births |
 | Custom 3 | Ground: horizon row within the segment (reserve rows above for lift). Shedding: autumn progress, 0–31 |

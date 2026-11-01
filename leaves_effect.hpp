@@ -5,7 +5,7 @@
 #include "leaf_exchange.hpp"
 
 constexpr uint32_t LEAVES_MAGIC = 0x4c45414bUL;
-constexpr unsigned LEAVES_CAPACITY = 32;
+constexpr unsigned LEAVES_CAPACITY = 48;
 constexpr unsigned LEAVES_SHED_CAPACITY = 2;
 constexpr uint32_t LEAF_SPAWN_MS = 10000;
 constexpr uint32_t LEAF_FALL_MS = 2000;
@@ -405,7 +405,8 @@ void renderLeavesToSegment(Segment &seg, const WindInputs &wind) {
   state.lastUpdate = strip.now;
   const float seconds = dt / 1000.0f;
   const unsigned capacity = state.shedding ? state.spawnerCount : LEAVES_CAPACITY;
-  const float target = seg.intensity / 255.0f * min<float>(LEAVES_CAPACITY, float(width) * (height - groundTop) / 8.0f);
+  // Peak litter roughly matches the tree's 41 leaves over a 32x6 ground band.
+  const float target = seg.intensity / 255.0f * min<float>(LEAVES_CAPACITY, float(width) * (height - groundTop) / 5.0f);
   if (!state.shedding) {
     state.flow.accumulator += seconds;
     while (state.flow.accumulator >= FLOW_STEP_SECONDS) {

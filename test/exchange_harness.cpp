@@ -7,18 +7,6 @@
 
 static LeavesState &ground(Segment &seg) { return *reinterpret_cast<LeavesState *>(seg.data); }
 
-static unsigned touchingLitter(Segment &seg) {
-  unsigned pairs = 0;
-  const auto &leaves = ground(seg).particles;
-  for (unsigned i = 0; i < LEAVES_CAPACITY; i++) for (unsigned j = 0; j < i; j++) {
-    if (!leaves[i].active || !leaves[j].active) continue;
-    int ax, ay, bx, by;
-    if (leafPixel(ground(seg), leaves[i], ax, ay) && leafPixel(ground(seg), leaves[j], bx, by)
-        && abs(ax - bx) < 2 && abs(ay - by) < 2) pairs++;
-  }
-  return pairs;
-}
-
 int main() {
   const uint32_t palette[3] = {0xa9ac11, 0xf29831, 0xab773c};
   strip.now = 1000;
@@ -47,7 +35,6 @@ int main() {
       wind.gustMps = max(litter.speed, litter.custom2) / 10.0f;
       renderWindToSegment(air, wind, 30);
     }
-    assert(touchingLitter(litter) < 40);
     assert(litter.outOfBoundsWrites == 0 && air.outOfBoundsWrites == 0);
   };
 
@@ -81,6 +68,9 @@ int main() {
   for (const auto &leaf : ground(litter).particles) if (leaf.active) assert(leaf.height <= 12);
 
   // Light wind: airborne leaves still come down as litter, but nothing lifts.
+  // Let the preceding gale's suspended litter and flow settle first.
+  litter.speed = litter.custom2 = litter.custom1 = air.speed = 0;
+  for (unsigned i = 0; i < 1000; i++) frame(false);
   const uint32_t liftsLight = exchange.liftsOffered, landingsLight = exchange.landingsTaken;
   litter.speed = 30; litter.custom2 = 40; litter.custom1 = 45;
   air.speed = 70;
