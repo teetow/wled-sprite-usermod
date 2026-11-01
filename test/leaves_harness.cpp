@@ -198,6 +198,26 @@ int main() {
   near.height = 2; projectGroundLeaf(projected, near);
   assert(near.y == 9 && near.depth == 1);
 
+  // Render two isolated, settled leaves at opposite ends of the ground plane.
+  // Distant litter must blend into the ground, and arrivals must fade from zero.
+  {
+    Segment distance(5, 2); // exactly two leaves at full seasonal density
+    distance.intensity = 255;
+    step(distance);
+    auto &runtime = state(distance);
+    placeGroundLeaf(runtime, runtime.particles[0], 1, 0);
+    placeGroundLeaf(runtime, runtime.particles[1], 4, 1);
+    runtime.particles[0].age = runtime.particles[1].age = LEAF_GROUND_FADE_MS;
+    step(distance);
+    const auto farAlpha = W(distance.pixel(1, 0)), nearAlpha = W(distance.pixel(4, 1));
+    assert(farAlpha >= 40 && farAlpha <= 50);
+    assert(nearAlpha >= 210 && nearAlpha <= 220);
+    assert(farAlpha < nearAlpha / 4);
+    runtime.particles[0].age = 0;
+    step(distance);
+    assert(W(distance.pixel(1, 0)) < farAlpha / 10);
+  }
+
   struct Metrics { double travel = 0, lateral = 0, population = 0, busiestRow = 0; unsigned moving = 0, rest = 0, lifted = 0, above = 0, samples = 0; float height = 0; };
   auto scenario = [](uint8_t mean, uint8_t gust, uint8_t activity, bool left = false) {
     strip.now = 1000;
@@ -326,11 +346,6 @@ int main() {
     unsigned departures = 0, edgeArrivals = 0, placedArrivals = 0;
     for (unsigned frame = 0; frame < 4000; frame++) {
       step(gusty);
-      // Ground litter never draws below half opacity, even while arriving.
-      for (const auto &leaf : state(gusty).particles) if (leaf.active) {
-        const int x = int(floorf(leaf.x + 0.5f)), y = int(floorf(leaf.y + 0.5f));
-        if (x >= 0 && y >= 0 && x < 32 && y < 12) assert(W(gusty.pixel(x, y)) >= 127);
-      }
       for (unsigned i = 0; i < LEAVES_CAPACITY; i++) {
         const auto &leaf = state(gusty).particles[i];
         if (wasActive[i] && !leaf.active) { departures++; goneAt[i] = strip.now; }
