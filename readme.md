@@ -27,12 +27,16 @@ those settings explicitly. `/json/info` advertises `contrast_ink_blend` so older
 hosts and firmware can fall back to a conventional backing. This is screen-RGB
 contrast, not a measurement of emitted LED light.
 
-`build-local.sh` now defaults stable builds to local `v16.0.1`; `--base-ref REF`
-selects another reviewed local commit without fetching. It applies the alpha,
+`build-local.sh` defaults to a fresh fetch of official WLED `main`; `--base-ref REF`
+explicitly selects a local commit without fetching. It applies the alpha,
 holdout, contrast-ink, and existing local cdata timestamp-test fixes in an
 isolated worktree, runs the web build/tests, then PlatformIO. OTA deployment
 restores the panel's pre-reboot power and brightness. The WLED checkout's
 pre-existing editor/task and test edits are left untouched.
+
+OTA uses a standard curl multipart upload. Deployment checks the image against
+its build metadata before sending, then verifies the running upstream commit
+and reboot before reporting success.
 
 ## Supported targets
 
@@ -484,8 +488,11 @@ versioned alpha-over compatibility patch from `patches/`, and link this repo
 into `custom_usermods` through `symlink://...`. The original WLED worktree and
 its currently checked-out branch are not changed.
 
-`stable` is the highest non-prerelease WLED version tag and is the default.
-`nightly` is the official moving `nightly` tag. If the compatibility patch no
+`main` is the default and fetches the current upstream development branch on
+every build. There is no automatic fallback to an older version. `stable`
+explicitly selects the highest non-prerelease WLED version tag; `nightly`
+selects the official moving `nightly` tag. The patches target current `main`.
+If a compatibility patch no
 longer applies cleanly, the build stops so upstream blending changes can be
 reviewed explicitly.
 
@@ -498,17 +505,19 @@ Successful builds are copied to
 `.build/<channel>/<pio-env>/firmware.bin`. The adjacent `build-info.json`
 records the exact WLED ref and commit, usermod commit and dirty state,
 compatibility-patch hash, PlatformIO environment, and build time.
+The running firmware also reports its upstream commit as
+`info.sprite_usermod.wled_sha` in `/json/info`.
 
 Build and deploy directly to a live WLED device:
 
 ```sh
-./build-local.sh /absolute/path/to/WLED esp32dev --channel stable --deploy-host wled-32.local
+./build-local.sh /absolute/path/to/WLED esp32dev --deploy-host wled-32.local
 ```
 
 Deploy a previously built firmware image without rebuilding:
 
 ```sh
-./build-local.sh /absolute/path/to/WLED esp32dev --channel stable --deploy-host wled-32.local --skip-build
+./build-local.sh /absolute/path/to/WLED esp32dev --deploy-host wled-32.local --skip-build
 ```
 
 When using `--skip-build`, select the same channel used to create the stored

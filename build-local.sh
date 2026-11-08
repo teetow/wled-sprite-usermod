@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 /path/to/WLED [pio-env] [--base-ref LOCAL_REF] [--channel stable|nightly] [--deploy-host HOST] [--skip-build]" >&2
+  echo "Usage: $0 /path/to/WLED [pio-env] [--base-ref LOCAL_REF] [--channel main|stable|nightly] [--deploy-host HOST] [--skip-build]" >&2
 }
 
 if [[ $# -eq 1 && ( $1 == -h || $1 == --help ) ]]; then
@@ -20,7 +20,7 @@ WLED_DIR=$(cd -- "$1" && pwd)
 shift
 
 PIO_ENV=esp32dev
-CHANNEL=stable
+CHANNEL=main
 DEPLOY_HOST=
 SKIP_BUILD=false
 BASE_REF_OVERRIDE=
@@ -76,8 +76,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ $CHANNEL != stable && $CHANNEL != nightly ]]; then
-  echo "Unsupported channel '$CHANNEL'; expected stable or nightly." >&2
+if [[ $CHANNEL != main && $CHANNEL != stable && $CHANNEL != nightly ]]; then
+  echo "Unsupported channel '$CHANNEL'; expected main, stable or nightly." >&2
   exit 1
 fi
 
@@ -141,6 +141,11 @@ find_official_remote() {
   return 1
 }
 
+resolve_main_ref() {
+  git -C "$WLED_DIR" fetch "$WLED_REMOTE" "+refs/heads/main:refs/remotes/$WLED_REMOTE/main" >&2 || return
+  printf '%s/main\n' "$WLED_REMOTE"
+}
+
 resolve_stable_ref() {
   local tag
   tag=$(git -C "$WLED_DIR" ls-remote --tags "$WLED_REMOTE" 'refs/tags/v*' | python3 -c '
@@ -155,17 +160,17 @@ for line in sys.stdin:
         tags.append((tuple(map(int, match.groups()[1:])), match.group(1)))
 if tags:
     print(max(tags)[1])
-')
+') || return
   if [[ -z $tag ]]; then
     return 1
   fi
 
-  git -C "$WLED_DIR" fetch --force "$WLED_REMOTE" "+refs/tags/$tag:refs/tags/$tag"
+  git -C "$WLED_DIR" fetch --force "$WLED_REMOTE" "+refs/tags/$tag:refs/tags/$tag" >&2 || return
   printf '%s\n' "$tag"
 }
 
 resolve_nightly_ref() {
-  git -C "$WLED_DIR" fetch --force "$WLED_REMOTE" '+refs/tags/nightly:refs/tags/nightly'
+  git -C "$WLED_DIR" fetch --force "$WLED_REMOTE" '+refs/tags/nightly:refs/tags/nightly' >&2 || return
   printf '%s\n' nightly
 }
 
@@ -192,8 +197,29 @@ deploy_firmware() {
     exit 1
   fi
 
-  local pre_uptime
+  local expected_sha
+  expected_sha=$(python3 - "$firmware" <<'PY'
+import hashlib, json, pathlib, re, sys
+firmware = pathlib.Path(sys.argv[1])
+try:
+    metadata = json.loads(firmware.with_name('build-info.json').read_text())
+    expected_sha = metadata['wled_sha']
+    expected_hash = metadata['firmware_sha256']
+    if not isinstance(expected_sha, str) or not re.fullmatch(r'[0-9a-f]{40}', expected_sha):
+        raise ValueError('invalid upstream commit')
+except (OSError, ValueError, KeyError, TypeError) as error:
+    sys.exit('Cannot validate firmware build metadata: ' + str(error))
+if hashlib.sha256(firmware.read_bytes()).hexdigest() != expected_hash:
+    sys.exit('Firmware checksum does not match build-info.json; refusing upload.')
+print(expected_sha)
+PY
+  )
+  local pre_seconds=$SECONDS pre_uptime
   pre_uptime=$(curl -fsS --max-time 10 "http://$host/json/info" 2>/dev/null | json_field uptime || true)
+  if [[ ! $pre_uptime =~ ^[0-9]+$ ]]; then
+    echo "Cannot read panel uptime from $host; refusing upload." >&2
+    return 1
+  fi
   local preserved_power
   preserved_power=$(curl -fsS --max-time 10 "http://$host/json/state" | python3 -c 'import json,sys; s=json.load(sys.stdin); print(json.dumps({"on":s["on"],"bri":s["bri"],"tt":0}))')
 
@@ -212,9 +238,12 @@ deploy_firmware() {
   while (( SECONDS < deadline )); do
     local post_info
     if post_info=$(curl -fsS --max-time 5 "http://$host/json/info" 2>/dev/null); then
-      local post_uptime ready
+      local post_uptime ready installed_sha
       post_uptime=$(printf '%s' "$post_info" | json_field uptime)
-      if [[ -n $post_uptime ]] && { [[ -z $pre_uptime ]] || (( post_uptime < pre_uptime )); }; then
+      installed_sha=$(printf '%s' "$post_info" | json_field sprite_usermod.wled_sha)
+      # Compare against the uptime expected without a reboot. This also works
+      # when uploading soon after the panel itself has just restarted.
+      if [[ $post_uptime =~ ^[0-9]+$ && $installed_sha == "$expected_sha" ]] && (( post_uptime + 3 < pre_uptime + SECONDS - pre_seconds )); then
         curl -fsS --max-time 10 -H 'Content-Type: application/json' -d "$preserved_power" "http://$host/json/state" >/dev/null
         ready=$(printf '%s' "$post_info" | json_field sprite_usermod.ready)
         ready=${ready,,}
@@ -222,7 +251,7 @@ deploy_firmware() {
           echo "Panel rebooted but sprite_usermod is not ready after deployment." >&2
           exit 1
         fi
-        echo "Deployment verified on $host (uptime: ${post_uptime}s)."
+        echo "Deployment verified on $host (upstream: $installed_sha, uptime: ${post_uptime}s)."
         return 0
       fi
     fi
@@ -243,9 +272,10 @@ if [[ $SKIP_BUILD == false ]]; then
 
   if [[ -n $BASE_REF_OVERRIDE ]]; then
     BASE_REF=$BASE_REF_OVERRIDE
+  elif [[ $CHANNEL == main ]]; then
+    BASE_REF=$(resolve_main_ref)
   elif [[ $CHANNEL == stable ]]; then
-    # Personal panel builds stay on the reviewed stable tag, without fetching.
-    BASE_REF=v16.0.1
+    BASE_REF=$(resolve_stable_ref)
   else
     BASE_REF=$(resolve_nightly_ref)
   fi
@@ -302,6 +332,7 @@ if [[ $SKIP_BUILD == false ]]; then
     printf 'extends = env:%s\n' "$PIO_ENV"
     printf 'build_flags = ${env:%s.build_flags}\n' "$PIO_ENV"
     printf '  -D NEOBLASTER_CONTRAST_INK=19\n'
+    printf '  -D NEOBLASTER_WLED_SHA=\\\"%s\\\"\n' "$BASE_SHA"
     printf 'custom_usermods =\n'
     printf '  ${env:%s.custom_usermods}\n' "$PIO_ENV"
     printf '  %s\n' "$USERMOD_SPEC"
@@ -342,6 +373,8 @@ if [[ $SKIP_BUILD == false ]]; then
     printf '  "patch_sha": "%s",\n' "$PATCH_SHA"
     printf '  "holdout_patch_sha": "%s",\n' "$HOLDOUT_PATCH_SHA"
     printf '  "contrast_patch_sha": "%s",\n' "$(git hash-object "$INK_PATCH_FILE")"
+    printf '  "rounded_output_patch_sha": "%s",\n' "$(git hash-object "$USERMOD_DIR/patches/wled-rounded-output.patch")"
+    printf '  "cdata_test_patch_sha": "%s",\n' "$(git hash-object "$USERMOD_DIR/patches/wled-cdata-test-timing.patch")"
     printf '  "firmware_sha256": "%s",\n' "$(sha256sum "$FIRMWARE_OUTPUT" | cut -d ' ' -f 1)"
     printf '  "pio_environment": "%s",\n' "$PIO_ENV"
     printf '  "built_at": "%s"\n' "$BUILT_AT"

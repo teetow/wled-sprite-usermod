@@ -1,4 +1,5 @@
 #include "wled.h"
+#include <cmath>
 
 #ifdef ARDUINO_ARCH_ESP32
 
@@ -35,7 +36,7 @@ void readWindSegment(JsonObject elem, int id) {
   }
   if (elem.containsKey("wind_spawn_rate")) {
     const float rate = elem["wind_spawn_rate"] | -1.0f;
-    windControls[id].spawnRateTenths = !isfinite(rate) || rate < 0 ? -1 : int16_t(roundf(min(3.0f, rate) * 10.0f));
+    windControls[id].spawnRateTenths = !std::isfinite(rate) || rate < 0 ? -1 : int16_t(roundf(min(3.0f, rate) * 10.0f));
   } else if (elem.containsKey("fx")) {
     windControls[id].spawnRateTenths = -1;
   }
@@ -133,6 +134,9 @@ void addWindState(JsonObject &root) {
 void addSpriteInfo(JsonObject &root) {
   JsonObject spriteInfo = root.createNestedObject(F("sprite_usermod"));
   spriteInfo[F("ready")] = spriteEffectId != 255;
+#ifdef NEOBLASTER_WLED_SHA
+  spriteInfo[F("wled_sha")] = F(NEOBLASTER_WLED_SHA);
+#endif
   spriteInfo[F("fxid")] = spriteEffectId;
   spriteInfo[F("precip_fxid")] = precipitationEffectId;
   spriteInfo[F("dithered_gradient_fxid")] = ditheredGradientEffectId;

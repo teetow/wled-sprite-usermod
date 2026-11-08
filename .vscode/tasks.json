@@ -27,7 +27,7 @@
 				"esp32dev"
 			],
 			"problemMatcher": [],
-			"detail": "Build firmware only, no deploy"
+			"detail": "Fetch current upstream main and build firmware"
 		},
 		{
 			"label": "FX: Deploy",
@@ -41,7 +41,7 @@
 				"wled-32.local"
 			],
 			"problemMatcher": [],
-			"detail": "Deploy the most recently built firmware without rebuilding"
+			"detail": "Deploy the most recent main-channel firmware without rebuilding"
 		},
 		{
 			"label": "FX: Build and Deploy",
@@ -55,7 +55,7 @@
 			],
 			"group": "build",
 			"problemMatcher": [],
-			"detail": "Build firmware and deploy it to wled-32.local"
+			"detail": "Fetch current upstream main, build and deploy to wled-32.local"
 		}
 	]
 }
