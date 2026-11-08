@@ -38,7 +38,7 @@
 				"esp32dev",
 				"--skip-build",
 				"--deploy-host",
-				"wled-32.local"
+				"wled-32.lan"
 			],
 			"problemMatcher": [],
 			"detail": "Deploy the most recent main-channel firmware without rebuilding"
@@ -51,11 +51,11 @@
 				"${workspaceFolder}/../wled-sprite-build",
 				"esp32dev",
 				"--deploy-host",
-				"wled-32.local"
+				"wled-32.lan"
 			],
 			"group": "build",
 			"problemMatcher": [],
-			"detail": "Fetch current upstream main, build and deploy to wled-32.local"
+			"detail": "Fetch current upstream main, build and deploy to wled-32.lan"
 		}
 	]
 }

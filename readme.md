@@ -508,16 +508,19 @@ compatibility-patch hash, PlatformIO environment, and build time.
 The running firmware also reports its upstream commit as
 `info.sprite_usermod.wled_sha` in `/json/info`.
 
+The local panel uses `wled-32.lan` through the router's LAN DNS. Keep its DNS
+record synchronized with DHCP instead of configuring an address override.
+
 Build and deploy directly to a live WLED device:
 
 ```sh
-./build-local.sh /absolute/path/to/WLED esp32dev --deploy-host wled-32.local
+./build-local.sh /absolute/path/to/WLED esp32dev --deploy-host wled-32.lan
 ```
 
 Deploy a previously built firmware image without rebuilding:
 
 ```sh
-./build-local.sh /absolute/path/to/WLED esp32dev --deploy-host wled-32.local --skip-build
+./build-local.sh /absolute/path/to/WLED esp32dev --deploy-host wled-32.lan --skip-build
 ```
 
 When using `--skip-build`, select the same channel used to create the stored
